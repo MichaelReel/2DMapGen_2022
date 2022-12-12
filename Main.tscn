@@ -5,8 +5,10 @@
 [node name="Node2D" type="Node2D"]
 
 [node name="DisplayControl" type="Control" parent="."]
+anchor_right = 1.0
+anchor_bottom = 1.0
 margin_right = 1024.0
-margin_bottom = 600.0
+margin_bottom = 1024.0
 
 [node name="MenuButton" type="MenuButton" parent="."]
 margin_left = 2.0

@@ -118,11 +118,11 @@ class RoadWorker:
 		if dir.x != 0:
 			# horizontal road
 			for y in range(pos.y, pos.y + dir.x * road_width, dir.x):
-				image.set_pixel(pos.x, y, col)
+				image.set_pixel(int(pos.x), y, col)
 		elif dir.y != 0:
 			# Vertical road
 			for x in range(pos.x, pos.x - dir.y * road_width, -dir.y):
-				image.set_pixel(x, pos.y, col)
+				image.set_pixel(x, int(pos.y), col)
 		
 		
 		image.unlock()
@@ -157,7 +157,7 @@ class RoadWorker:
 					# Draw image
 					image.blit_rect(building.image, Rect2(Vector2(), building.size), plot_bounds.position)
 					left_just_split = false
-					var frontage : int = Vector2(building.size.x * dir.x, building.size.y * dir.y).length()
+					var frontage := int(Vector2(building.size.x * dir.x, building.size.y * dir.y).length())
 					left_block_dis = frontage
 				else:
 					building_pool.push_building(building)
@@ -193,7 +193,7 @@ class RoadWorker:
 					# Draw image
 					image.blit_rect(building.image, Rect2(Vector2(), building.size), plot_bounds.position)
 					right_just_split = false
-					var frontage : int = Vector2(building.size.x * dir.x, building.size.y * dir.y).length()
+					var frontage := int(Vector2(building.size.x * dir.x, building.size.y * dir.y).length())
 					right_block_dis = frontage
 				else:
 					building_pool.push_building(building)
@@ -205,18 +205,18 @@ class RoadWorker:
 		image.lock()
 		# Check the edges
 		for y in range(plot.position.y, plot.end.y):
-			if not image.get_pixel(plot.position.x, y).is_equal_approx(clear_color):
+			if not image.get_pixel(int(plot.position.x), y).is_equal_approx(clear_color):
 				image.unlock()
 				return false
-			if not image.get_pixel(plot.end.x, y).is_equal_approx(clear_color):
+			if not image.get_pixel(int(plot.end.x), y).is_equal_approx(clear_color):
 				image.unlock()
 				return false
 				
 		for x in range(plot.position.x, plot.end.x):
-			if not image.get_pixel(x, plot.position.y).is_equal_approx(clear_color):
+			if not image.get_pixel(x, int(plot.position.y)).is_equal_approx(clear_color):
 				image.unlock()
 				return false
-			if not image.get_pixel(x, plot.end.y).is_equal_approx(clear_color):
+			if not image.get_pixel(x, int(plot.end.y)).is_equal_approx(clear_color):
 				image.unlock()
 				return false
 		
@@ -228,12 +228,12 @@ func _ready():
 	building_pool.create()
 	
 	var road := Color(0.1, 0.1, 0.1, 1.0)
-	var start := Vector2(width / 2, height / 2)
+	var start := Vector2(width / 2.0, height / 2.0)
 	var start_road_width := 4
 
 	image.fill(BACK_GROUND)
 	
-	var half_road := start_road_width / 4
+	var half_road := int(start_road_width / 4.0)
 	
 	road_workers.append(RoadWorker.new(start + (Vector2.UP + Vector2.LEFT) * (half_road + 1), Vector2.UP, road, start_road_width))
 	road_workers.append(RoadWorker.new(start + (Vector2.RIGHT + Vector2.UP) * half_road + Vector2.UP, Vector2.RIGHT, road, start_road_width))
