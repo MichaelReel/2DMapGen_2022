@@ -4,23 +4,15 @@ onready var image := Image.new()
 onready var imageTexture := ImageTexture.new()
 onready var ready := false
 
-const CELL_EDGE := 256.0
+const CELL_EDGE := 32.0
 const SEA_COLOR := Color8(32, 32, 128, 255)
 const GRID_COLOR := Color8(40, 40, 136, 255)
 const COAST_COLOR := Color8(128, 128, 32, 255)
 const RIVER_COLOR := Color8(128, 32, 32, 255)
 const LAND_COLOR := Color8(32, 128, 32, 255)
 
+
 var base_grid : BaseGrid
-
-
-class BaseConnection:
-	var _other : BasePoint
-	var _line : BaseLine
-	
-	func _init(other: BasePoint, line: BaseLine) -> void:
-		_other = other
-		_line = line
 
 
 class BasePoint:
@@ -31,17 +23,69 @@ class BasePoint:
 		_pos = Vector2(x, y)
 		_connections = []
 		
-	func add_connection(other: BasePoint, line: BaseLine) -> void:
-		_connections.append(BaseConnection.new(other, line))
+	func add_connection(line: BaseLine) -> void:
+		_connections.append(line)
+	
+	static func sort_vert_hortz(a: BasePoint, b: BasePoint) -> bool:
+		if a._pos.y < b._pos.y:
+			return true
+		elif a._pos.y == b._pos.y and a._pos.x < b._pos.x:
+				return true
+		return false
+	
+	func equals(other: BasePoint) -> bool:
+		return self._pos == other._pos
+	
+	func higher_connections() -> Array:
+		# Return connection lines to "higher" points
+		var higher_conns = []
+		for con in _connections:
+			var other = con.other_point(self)
+			if sort_vert_hortz(self, other):
+				higher_conns.append(con)
+		return higher_conns
+
+	func higher_connections_to_point(point) -> Array:
+		# Return connection lines to "higher" points that connect to a given point
+		var higher_conns = []
+		for con in _connections:
+			var other = con.other_point(self)
+			if sort_vert_hortz(self, other):
+				if other.has_connection_to_point(point):
+					higher_conns.append(con)
+		return higher_conns
+
+	func has_connection_to_point(point) -> bool:
+		for con in _connections:
+			if con.other_point(self) == point:
+				return true
+		return false
+
+	func connection_to_point(point) -> BaseLine:
+		for con in _connections:
+			if con.other_point(self) == point:
+				return con
+		return BaseLine.error()
+	
+	func error() -> BasePoint:
+		printerr("Something needed a placeholder BasePoint")
+		return BasePoint.new(0.0, 0.0)
 
 
 class BaseLine:
-	var _a : BasePoint
-	var _b : BasePoint
+	
+	var _a: BasePoint
+	var _b: BasePoint
+	var _borders: Array
 	
 	func _init(a: BasePoint, b: BasePoint) -> void:
-		_a = a
-		_b = b
+		if BasePoint.sort_vert_hortz(a, b):
+			_a = a
+			_b = b
+		else:
+			_a = b
+			_b = a
+		_borders = []
 
 	func shared_point(other: BaseLine) -> BasePoint:
 		if self._a == other._a or self._a == other._b:
@@ -49,22 +93,54 @@ class BaseLine:
 		elif self._b == other._a or self._b == other._b:
 			return _b
 		else:
-			return BasePoint.new(0.0, 0.0)
-		
+			return BasePoint.error()
+	
+	func other_point(this: BasePoint) -> BasePoint:
+		if this == _a:
+			return _b
+		return _a
+	
+	static func sort_vert_hortz(a: BaseLine, b: BaseLine) -> bool:
+		if BasePoint.sort_vert_hortz(a._a, b._a):
+			return true
+		elif a._a.equals(b._a) and BasePoint.sort_vert_hortz(a._b, b._b):
+			return true
+		return false
+	
+	func error() -> BaseLine:
+		printerr("Something needed a placeholder BaseLine")
+		return BaseLine.new(BasePoint.new(0.0, 0.0), BasePoint.new(0.0, 0.0))
+	
+	func set_border_of(triangle: BaseTriangle) -> void:
+		_borders.append(triangle)
+	
+	func get_bordering_triangles() -> Array:
+		return _borders
+
 
 class BaseTriangle:
-	var _points : Array
-	var _lines : Array
+	var _points: Array
+	var _edges: Array
+	var _neighbours: Array
 	
 	func _init(a: BaseLine, b: BaseLine, c: BaseLine) -> void:
-		_lines = [a, b, c]
 		_points = [a.shared_point(b), a.shared_point(c), b.shared_point(c)]
+		_points.sort_custom(BasePoint, "sort_vert_hortz")
+		_edges = [a, b, c]
+		for edge in _edges:
+			edge.set_border_of(self)
+
+	func update_neighbours_from_edges() -> void:
+		for edge in _edges:
+			for tri in edge.get_bordering_triangles():
+				if tri != self:
+					_neighbours.append(tri)
 
 
 class BaseGrid:
-	var grid_points : Array = []
-	var grid_lines : Array = []
-	var grid_tris : Array = []
+	var grid_points: Array = []
+	var grid_lines: Array = []
+	var grid_tris: Array = []
 	
 	func _init(edge_size: float, rect_size: Vector2) -> void:
 		var tri_side = edge_size
@@ -97,20 +173,30 @@ class BaseGrid:
 				if row_ind > 0 and col_ind + ind_offset >= 0 and col_ind + ind_offset < grid_points[row_ind - 1].size():
 					var existing_point = grid_points[row_ind - 1][col_ind + ind_offset]
 					lines.append(_add_grid_line(existing_point, new_point))
-		
 				
-				# Lol, no! We're not drawing triangles above - we have 3 lines to a point:
-#				if lines.size() == 3:
-#					grid_tris.append(BaseTriangle.new(lines[0], lines[1], lines[2]))
-					
 				col_ind += 1
 			grid_points.append(points_row)
 			row_ind += 1
+		
+		# Go through the points and create triangles "upstream"
+		# I.e.: Triangles together with points only greater than the current point
+		for row in grid_points:
+			for point in row:
+				# Get connections, find connects between higher points
+				for first_line in point.higher_connections():
+					var second_point: BasePoint = first_line.other_point(point)
+					for second_line in second_point.higher_connections_to_point(point):
+						var third_point: BasePoint = second_line.other_point(second_point)
+						var third_line : BaseLine = third_point.connection_to_point(point)
+						grid_tris.append(BaseTriangle.new(first_line, second_line, third_line))
+		
+		for tri in grid_tris:
+			tri.update_neighbours_from_edges()
 	
 	func _add_grid_line(a: BasePoint, b: BasePoint) -> BaseLine:
 		var new_line := BaseLine.new(a, b)
-		a.add_connection(b, new_line)
-		b.add_connection(a, new_line)
+		a.add_connection(new_line)
+		b.add_connection(new_line)
 		grid_lines.append(new_line)
 		return new_line
 	
@@ -128,10 +214,13 @@ class BaseGrid:
 
 		for tri in grid_tris:
 			draw_line_on_image(image, tri._points[0]._pos, tri._points[1]._pos, COAST_COLOR)
-#			draw_line_on_image(image, tri._points[1]._pos, tri._points[2]._pos, RIVER_COLOR)
-#			draw_line_on_image(image, tri._points[0]._pos, tri._points[2]._pos, LAND_COLOR)
+			draw_line_on_image(image, tri._points[1]._pos, tri._points[2]._pos, RIVER_COLOR)
+			draw_line_on_image(image, tri._points[0]._pos, tri._points[2]._pos, LAND_COLOR)
 		image.unlock()
 
+
+class TriBlob:
+	pass
 
 
 func _ready() -> void:
