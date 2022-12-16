@@ -4,7 +4,7 @@ onready var image := Image.new()
 onready var imageTexture := ImageTexture.new()
 onready var ready := false
 
-const CELL_EDGE := 32.0
+const CELL_EDGE := 256.0
 const SEA_COLOR := Color8(32, 32, 128, 255)
 const GRID_COLOR := Color8(40, 40, 136, 255)
 const COAST_COLOR := Color8(128, 128, 32, 255)
@@ -43,10 +43,28 @@ class BaseLine:
 		_a = a
 		_b = b
 
+	func shared_point(other: BaseLine) -> BasePoint:
+		if self._a == other._a or self._a == other._b:
+			return self._a
+		elif self._b == other._a or self._b == other._b:
+			return _b
+		else:
+			return BasePoint.new(0.0, 0.0)
+		
+
+class BaseTriangle:
+	var _points : Array
+	var _lines : Array
+	
+	func _init(a: BaseLine, b: BaseLine, c: BaseLine) -> void:
+		_lines = [a, b, c]
+		_points = [a.shared_point(b), a.shared_point(c), b.shared_point(c)]
+
 
 class BaseGrid:
 	var grid_points : Array = []
 	var grid_lines : Array = []
+	var grid_tris : Array = []
 	
 	func _init(edge_size: float, rect_size: Vector2) -> void:
 		var tri_side = edge_size
@@ -65,29 +83,36 @@ class BaseGrid:
 			var col_ind : int = 0
 			for x in range(offset + (tri_side / 2.0), rect_size.x, tri_side):
 				var new_point = BasePoint.new(x, y)
+				var lines := []
 				points_row.append(new_point)
 				# Connect from the left
 				if col_ind > 0:
 					var existing_point : BasePoint = points_row[col_ind - 1]
-					_add_grid_line(existing_point, new_point)
+					lines.append(_add_grid_line(existing_point, new_point))
 				# Connect from above (the simpler way - left or right depends on row)
 				if row_ind > 0 and col_ind < grid_points[row_ind - 1].size():
 					var existing_point = grid_points[row_ind - 1][col_ind]
-					_add_grid_line(existing_point, new_point)
+					lines.append(_add_grid_line(existing_point, new_point))
 				# Connect from above (the other way)
 				if row_ind > 0 and col_ind + ind_offset >= 0 and col_ind + ind_offset < grid_points[row_ind - 1].size():
 					var existing_point = grid_points[row_ind - 1][col_ind + ind_offset]
-					_add_grid_line(existing_point, new_point)
+					lines.append(_add_grid_line(existing_point, new_point))
 		
+				
+				# Lol, no! We're not drawing triangles above - we have 3 lines to a point:
+#				if lines.size() == 3:
+#					grid_tris.append(BaseTriangle.new(lines[0], lines[1], lines[2]))
+					
 				col_ind += 1
 			grid_points.append(points_row)
 			row_ind += 1
 	
-	func _add_grid_line(a: BasePoint, b: BasePoint) -> void:
+	func _add_grid_line(a: BasePoint, b: BasePoint) -> BaseLine:
 		var new_line := BaseLine.new(a, b)
 		a.add_connection(b, new_line)
 		b.add_connection(a, new_line)
 		grid_lines.append(new_line)
+		return new_line
 	
 	static func draw_line_on_image(image: Image, a: Vector2, b: Vector2, col: Color) -> void:
 		var longest_side = int(max(abs(a.x - b.x), abs(a.y - b.y))) + 1
@@ -97,8 +122,14 @@ class BaseGrid:
 	
 	func draw_grid(image: Image, color: Color) -> void:
 		image.lock()
+		
 		for line in grid_lines:
 			draw_line_on_image(image, line._a._pos, line._b._pos, color)
+
+		for tri in grid_tris:
+			draw_line_on_image(image, tri._points[0]._pos, tri._points[1]._pos, COAST_COLOR)
+#			draw_line_on_image(image, tri._points[1]._pos, tri._points[2]._pos, RIVER_COLOR)
+#			draw_line_on_image(image, tri._points[0]._pos, tri._points[2]._pos, LAND_COLOR)
 		image.unlock()
 
 
@@ -120,4 +151,4 @@ func _process(_delta) -> void:
 	imageTexture.create_from_image(image)
 	texture = imageTexture
 	
-	
+
