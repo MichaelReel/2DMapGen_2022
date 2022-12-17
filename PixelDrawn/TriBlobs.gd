@@ -5,7 +5,7 @@ onready var imageTexture := ImageTexture.new()
 onready var ready := false
 onready var rng := RandomNumberGenerator.new()
 
-const CELL_EDGE := 16.0
+const CELL_EDGE := 8.0
 const SEA_COLOR := Color8(32, 32, 128, 255)
 const GRID_COLOR := Color8(40, 40, 136, 255)
 const COAST_COLOR := Color8(128, 128, 32, 255)
@@ -164,9 +164,10 @@ class BaseTriangle:
 
 
 class BaseGrid:
-	var _grid_points: Array = []
+	var _grid_points: Array = []  # Array of rows of points
 	var _grid_lines: Array = []
 	var _grid_tris: Array = []
+	var _cell_count: int = 0
 	
 	func _init(edge_size: float, rect_size: Vector2) -> void:
 		var tri_side = edge_size
@@ -207,6 +208,7 @@ class BaseGrid:
 		# Go through the points and create triangles "upstream"
 		# I.e.: Triangles together with points only greater than the current point
 		for row in _grid_points:
+			var tri_row : Array = []
 			for point in row:
 				# Get connections, find connects between higher points
 				for first_line in point.higher_connections():
@@ -214,10 +216,13 @@ class BaseGrid:
 					for second_line in second_point.higher_connections_to_point(point):
 						var third_point: BasePoint = second_line.other_point(second_point)
 						var third_line: BaseLine = third_point.connection_to_point(point)
-						_grid_tris.append(BaseTriangle.new(first_line, second_line, third_line))
+						tri_row.append(BaseTriangle.new(first_line, second_line, third_line))
+						_cell_count += 1
+			_grid_tris.append(tri_row)
 		
-		for tri in _grid_tris:
-			tri.update_neighbours_from_edges()
+		for tri_row in _grid_tris:
+			for tri in tri_row:
+				tri.update_neighbours_from_edges()
 	
 	func _add_grid_line(a: BasePoint, b: BasePoint) -> BaseLine:
 		var new_line := BaseLine.new(a, b)
@@ -238,12 +243,16 @@ class BaseGrid:
 		for line in _grid_lines:
 			draw_line_on_image(image, line._a._pos, line._b._pos, color)
 		image.unlock()
+	
+	func get_cell_count() -> int:
+		return _cell_count
 		
 #	func get_triangle_closest_to(point: Vector2) -> BaseTriangle:
 #		pass
 	
 	func get_middle_triangle() -> BaseTriangle:
-		return _grid_tris[_grid_tris.size() / 2]
+		var mid_row = _grid_tris[_grid_tris.size() / 2]
+		return mid_row[mid_row.size() / 2]
 
 
 class TriBlob:
@@ -282,7 +291,10 @@ class TriBlob:
 	func sort_desc_attachment(a: BaseTriangle, b: BaseTriangle) -> bool:
 		return a.count_neighbours_with_parent(self) > b.count_neighbours_with_parent(self)
 	
-	func expand_tick() -> void:
+	func expand_tick() -> bool:
+		if _cells.size() >= _cell_limit:
+			return true
+		
 		var frame_end = OS.get_ticks_msec() + FRAME_TIME_MILLIS
 		
 		while OS.get_ticks_msec() < frame_end and _cells.size() < _cell_limit:
@@ -297,11 +309,13 @@ class TriBlob:
 				else:
 					_cell_limit = _cells.size()
 					print("Blob appears to have filled the medium")
-					return
+					return true
 			# Of the potential cells, order by the most attached
 			expand_cells.sort_custom(self, "sort_desc_attachment")
 			# Grab the top one and "expand"
 			add_triangle_as_cell(expand_cells[0])
+		
+		return false
 
 
 func _ready() -> void:
@@ -311,7 +325,10 @@ func _ready() -> void:
 	rng.seed = OS.get_system_time_msecs()
 	
 	base_grid = BaseGrid.new(CELL_EDGE, rect_size)
-	land_blob = TriBlob.new(base_grid, rng, 1000)
+	
+	var island_cells_count : int = (base_grid.get_cell_count() / 4) * 3
+
+	land_blob = TriBlob.new(base_grid, rng, island_cells_count)
 	
 	ready = true
 
