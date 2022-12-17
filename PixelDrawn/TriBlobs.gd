@@ -3,17 +3,18 @@ extends TextureRect
 onready var image := Image.new()
 onready var imageTexture := ImageTexture.new()
 onready var ready := false
+onready var rng := RandomNumberGenerator.new()
 
-const CELL_EDGE := 32.0
+const CELL_EDGE := 16.0
 const SEA_COLOR := Color8(32, 32, 128, 255)
 const GRID_COLOR := Color8(40, 40, 136, 255)
 const COAST_COLOR := Color8(128, 128, 32, 255)
 const RIVER_COLOR := Color8(128, 32, 32, 255)
 const LAND_COLOR := Color8(32, 128, 32, 255)
-
+const FRAME_TIME_MILLIS := 30
 
 var base_grid: BaseGrid
-var tri_blob: TriBlob
+var land_blob: TriBlob
 
 
 class BasePoint:
@@ -122,6 +123,8 @@ class BaseTriangle:
 	var _points: Array
 	var _edges: Array
 	var _neighbours: Array
+	var _parent: Object = null
+	var _pos: Vector2
 	
 	func _init(a: BaseLine, b: BaseLine, c: BaseLine) -> void:
 		_points = [a.shared_point(b), a.shared_point(c), b.shared_point(c)]
@@ -129,6 +132,7 @@ class BaseTriangle:
 		_edges = [a, b, c]
 		for edge in _edges:
 			edge.set_border_of(self)
+		_pos = (_points[0]._pos + _points[1]._pos + _points[2]._pos) / 3.0
 
 	func update_neighbours_from_edges() -> void:
 		for edge in _edges:
@@ -138,6 +142,25 @@ class BaseTriangle:
 	
 	func get_points() -> Array:
 		return _points
+	
+	func get_parent() -> Object:
+		return _parent
+	
+	func set_parent(parent: Object) -> void:
+		_parent = parent
+
+	func get_neighbours_with_parent(parent: Object) -> Array:
+		var parented_neighbours = []
+		for neighbour in _neighbours:
+			if neighbour.get_parent() == parent:
+				parented_neighbours.append(neighbour)
+		return parented_neighbours
+	
+	func count_neighbours_with_parent(parent: Object) -> int:
+		return get_neighbours_with_parent(parent).size()
+	
+	func get_neighbours_no_parent() -> Array:
+		return get_neighbours_with_parent(null)
 
 
 class BaseGrid:
@@ -215,38 +238,80 @@ class BaseGrid:
 		for line in _grid_lines:
 			draw_line_on_image(image, line._a._pos, line._b._pos, color)
 		image.unlock()
+		
+#	func get_triangle_closest_to(point: Vector2) -> BaseTriangle:
+#		pass
 	
-	func get_triangles() -> Array:
-		return _grid_tris
+	func get_middle_triangle() -> BaseTriangle:
+		return _grid_tris[_grid_tris.size() / 2]
 
 
 class TriBlob:
 	var _grid: BaseGrid
-	var _start: BaseTriangle
+	var _cells: Array
+	var _rng: RandomNumberGenerator
+	var _cell_limit: int
 	
-	func _init(grid: BaseGrid):
+	func _init(grid: BaseGrid, rng: RandomNumberGenerator, cell_limit: int = 1):
 		_grid = grid
-		var tris = grid.get_triangles()
-		_start = tris[randi() % len(tris)]
+		_cells = []
+		_rng = rng
+		_cell_limit = cell_limit
+		var start = grid.get_middle_triangle()
+		add_triangle_as_cell(start)
 	
-	static func draw_triangle_on_image(image: Image, a: Vector2, b: Vector2, c: Vector2, color: Color) -> void:
+	func add_triangle_as_cell(triangle: BaseTriangle) -> void:
+		triangle.set_parent(self)
+		_cells.append(triangle)
+	
+	static func draw_tri_points_on_image(image: Image, a: Vector2, b: Vector2, c: Vector2, color: Color) -> void:
 		BaseGrid.draw_line_on_image(image, a, b, color)
 		BaseGrid.draw_line_on_image(image, a, c, color)
 		BaseGrid.draw_line_on_image(image, b, c, color)
 	
+	static func draw_triangle_on_image(image: Image, triangle: BaseTriangle, color: Color) -> void:
+		var points := triangle.get_points()
+		draw_tri_points_on_image(image, points[0]._pos, points[1]._pos, points[2]._pos, color)
+	
 	func draw_triangles(image: Image, color: Color) -> void:
 		image.lock()
-		var points := _start.get_points()
-		draw_triangle_on_image(image, points[0]._pos, points[1]._pos, points[2]._pos, color)
+		for cell in _cells:
+			draw_triangle_on_image(image, cell, color)
 		image.unlock()
+	
+	func sort_desc_attachment(a: BaseTriangle, b: BaseTriangle) -> bool:
+		return a.count_neighbours_with_parent(self) > b.count_neighbours_with_parent(self)
+	
+	func expand_tick() -> void:
+		var frame_end = OS.get_ticks_msec() + FRAME_TIME_MILLIS
+		
+		while OS.get_ticks_msec() < frame_end and _cells.size() < _cell_limit:
+			_cells.shuffle()  # Note: Uses the global rng
+			var index : int = 0
+			# Find a cell with neighbours that haven't been assimilated
+			var expand_cells : Array = _cells[index].get_neighbours_no_parent()
+			while expand_cells.size() == 0:
+				if index + 1 < _cells.size():
+					index += 1
+					expand_cells = _cells[index].get_neighbours_no_parent()
+				else:
+					_cell_limit = _cells.size()
+					print("Blob appears to have filled the medium")
+					return
+			# Of the potential cells, order by the most attached
+			expand_cells.sort_custom(self, "sort_desc_attachment")
+			# Grab the top one and "expand"
+			add_triangle_as_cell(expand_cells[0])
 
 
 func _ready() -> void:
 	image.create(int(rect_size.x), int(rect_size.y), false, Image.FORMAT_RGBA8)
 	image.fill(SEA_COLOR)
+#	rng.seed = hash("island")
+	rng.seed = OS.get_system_time_msecs()
 	
 	base_grid = BaseGrid.new(CELL_EDGE, rect_size)
-	tri_blob = TriBlob.new(base_grid)
+	land_blob = TriBlob.new(base_grid, rng, 1000)
 	
 	ready = true
 
@@ -256,7 +321,9 @@ func _process(_delta) -> void:
 		return
 	
 	base_grid.draw_grid(image, GRID_COLOR)
-	tri_blob.draw_triangles(image, LAND_COLOR)
+	land_blob.draw_triangles(image, LAND_COLOR)
+	land_blob.expand_tick()
+	
 	imageTexture.create_from_image(image)
 	texture = imageTexture
 	
