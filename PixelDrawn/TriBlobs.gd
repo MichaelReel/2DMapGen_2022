@@ -12,14 +12,15 @@ const RIVER_COLOR := Color8(128, 32, 32, 255)
 const LAND_COLOR := Color8(32, 128, 32, 255)
 
 
-var base_grid : BaseGrid
+var base_grid: BaseGrid
+var tri_blob: TriBlob
 
 
 class BasePoint:
-	var _pos : Vector2
-	var _connections : Array
+	var _pos: Vector2
+	var _connections: Array
 	
-	func _init(x : float, y : float) -> void:
+	func _init(x: float, y: float) -> void:
 		_pos = Vector2(x, y)
 		_connections = []
 		
@@ -73,7 +74,6 @@ class BasePoint:
 
 
 class BaseLine:
-	
 	var _a: BasePoint
 	var _b: BasePoint
 	var _borders: Array
@@ -135,12 +135,15 @@ class BaseTriangle:
 			for tri in edge.get_bordering_triangles():
 				if tri != self:
 					_neighbours.append(tri)
+	
+	func get_points() -> Array:
+		return _points
 
 
 class BaseGrid:
-	var grid_points: Array = []
-	var grid_lines: Array = []
-	var grid_tris: Array = []
+	var _grid_points: Array = []
+	var _grid_lines: Array = []
+	var _grid_tris: Array = []
 	
 	func _init(edge_size: float, rect_size: Vector2) -> void:
 		var tri_side = edge_size
@@ -151,53 +154,53 @@ class BaseGrid:
 #		 |___\    h^2 = (1 - 1/4) * s^2
 #		  s/2     h^2 = ( 3/4 * s^2 )
 		
-		var row_ind : int = 0
+		var row_ind: int = 0
 		for y in range (0.0 + tri_height, rect_size.y, tri_height):
-			var points_row : Array = []
-			var ind_offset : int = (row_ind % 2) * 2 - 1
-			var offset : float = (row_ind % 2) * (tri_side / 2.0)
-			var col_ind : int = 0
+			var points_row: Array = []
+			var ind_offset: int = (row_ind % 2) * 2 - 1
+			var offset: float = (row_ind % 2) * (tri_side / 2.0)
+			var col_ind: int = 0
 			for x in range(offset + (tri_side / 2.0), rect_size.x, tri_side):
 				var new_point = BasePoint.new(x, y)
 				var lines := []
 				points_row.append(new_point)
 				# Connect from the left
 				if col_ind > 0:
-					var existing_point : BasePoint = points_row[col_ind - 1]
+					var existing_point: BasePoint = points_row[col_ind - 1]
 					lines.append(_add_grid_line(existing_point, new_point))
 				# Connect from above (the simpler way - left or right depends on row)
-				if row_ind > 0 and col_ind < grid_points[row_ind - 1].size():
-					var existing_point = grid_points[row_ind - 1][col_ind]
+				if row_ind > 0 and col_ind < _grid_points[row_ind - 1].size():
+					var existing_point = _grid_points[row_ind - 1][col_ind]
 					lines.append(_add_grid_line(existing_point, new_point))
 				# Connect from above (the other way)
-				if row_ind > 0 and col_ind + ind_offset >= 0 and col_ind + ind_offset < grid_points[row_ind - 1].size():
-					var existing_point = grid_points[row_ind - 1][col_ind + ind_offset]
+				if row_ind > 0 and col_ind + ind_offset >= 0 and col_ind + ind_offset < _grid_points[row_ind - 1].size():
+					var existing_point = _grid_points[row_ind - 1][col_ind + ind_offset]
 					lines.append(_add_grid_line(existing_point, new_point))
 				
 				col_ind += 1
-			grid_points.append(points_row)
+			_grid_points.append(points_row)
 			row_ind += 1
 		
 		# Go through the points and create triangles "upstream"
 		# I.e.: Triangles together with points only greater than the current point
-		for row in grid_points:
+		for row in _grid_points:
 			for point in row:
 				# Get connections, find connects between higher points
 				for first_line in point.higher_connections():
 					var second_point: BasePoint = first_line.other_point(point)
 					for second_line in second_point.higher_connections_to_point(point):
 						var third_point: BasePoint = second_line.other_point(second_point)
-						var third_line : BaseLine = third_point.connection_to_point(point)
-						grid_tris.append(BaseTriangle.new(first_line, second_line, third_line))
+						var third_line: BaseLine = third_point.connection_to_point(point)
+						_grid_tris.append(BaseTriangle.new(first_line, second_line, third_line))
 		
-		for tri in grid_tris:
+		for tri in _grid_tris:
 			tri.update_neighbours_from_edges()
 	
 	func _add_grid_line(a: BasePoint, b: BasePoint) -> BaseLine:
 		var new_line := BaseLine.new(a, b)
 		a.add_connection(new_line)
 		b.add_connection(new_line)
-		grid_lines.append(new_line)
+		_grid_lines.append(new_line)
 		return new_line
 	
 	static func draw_line_on_image(image: Image, a: Vector2, b: Vector2, col: Color) -> void:
@@ -209,18 +212,33 @@ class BaseGrid:
 	func draw_grid(image: Image, color: Color) -> void:
 		image.lock()
 		
-		for line in grid_lines:
+		for line in _grid_lines:
 			draw_line_on_image(image, line._a._pos, line._b._pos, color)
-
-		for tri in grid_tris:
-			draw_line_on_image(image, tri._points[0]._pos, tri._points[1]._pos, COAST_COLOR)
-			draw_line_on_image(image, tri._points[1]._pos, tri._points[2]._pos, RIVER_COLOR)
-			draw_line_on_image(image, tri._points[0]._pos, tri._points[2]._pos, LAND_COLOR)
 		image.unlock()
+	
+	func get_triangles() -> Array:
+		return _grid_tris
 
 
 class TriBlob:
-	pass
+	var _grid: BaseGrid
+	var _start: BaseTriangle
+	
+	func _init(grid: BaseGrid):
+		_grid = grid
+		var tris = grid.get_triangles()
+		_start = tris[randi() % len(tris)]
+	
+	static func draw_triangle_on_image(image: Image, a: Vector2, b: Vector2, c: Vector2, color: Color) -> void:
+		BaseGrid.draw_line_on_image(image, a, b, color)
+		BaseGrid.draw_line_on_image(image, a, c, color)
+		BaseGrid.draw_line_on_image(image, b, c, color)
+	
+	func draw_triangles(image: Image, color: Color) -> void:
+		image.lock()
+		var points := _start.get_points()
+		draw_triangle_on_image(image, points[0]._pos, points[1]._pos, points[2]._pos, color)
+		image.unlock()
 
 
 func _ready() -> void:
@@ -228,6 +246,7 @@ func _ready() -> void:
 	image.fill(SEA_COLOR)
 	
 	base_grid = BaseGrid.new(CELL_EDGE, rect_size)
+	tri_blob = TriBlob.new(base_grid)
 	
 	ready = true
 
@@ -237,6 +256,7 @@ func _process(_delta) -> void:
 		return
 	
 	base_grid.draw_grid(image, GRID_COLOR)
+	tri_blob.draw_triangles(image, LAND_COLOR)
 	imageTexture.create_from_image(image)
 	texture = imageTexture
 	
