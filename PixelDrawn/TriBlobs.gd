@@ -2,8 +2,9 @@ extends TextureRect
 
 onready var image := Image.new()
 onready var imageTexture := ImageTexture.new()
-onready var ready := false
 onready var rng := RandomNumberGenerator.new()
+onready var ready := false
+onready var blob_done := false
 
 const CELL_EDGE := 8.0
 const SEA_COLOR := Color8(32, 32, 128, 255)
@@ -260,6 +261,7 @@ class TriBlob:
 	var _cells: Array
 	var _rng: RandomNumberGenerator
 	var _cell_limit: int
+	var _blob_front: Array
 	
 	func _init(grid: BaseGrid, rng: RandomNumberGenerator, cell_limit: int = 1):
 		_grid = grid
@@ -272,6 +274,13 @@ class TriBlob:
 	func add_triangle_as_cell(triangle: BaseTriangle) -> void:
 		triangle.set_parent(self)
 		_cells.append(triangle)
+		# Remove this one from the _blob_front
+		if triangle in _blob_front:
+			_blob_front.erase(triangle)  # Not a super fast action
+		# Add neighbours to _blob_front
+		for neighbour in triangle.get_neighbours_no_parent():
+			if not neighbour in _blob_front:
+				_blob_front.append(neighbour)
 	
 	static func draw_tri_points_on_image(image: Image, a: Vector2, b: Vector2, c: Vector2, color: Color) -> void:
 		BaseGrid.draw_line_on_image(image, a, b, color)
@@ -298,22 +307,8 @@ class TriBlob:
 		var frame_end = OS.get_ticks_msec() + FRAME_TIME_MILLIS
 		
 		while OS.get_ticks_msec() < frame_end and _cells.size() < _cell_limit:
-			_cells.shuffle()  # Note: Uses the global rng
-			var index : int = 0
-			# Find a cell with neighbours that haven't been assimilated
-			var expand_cells : Array = _cells[index].get_neighbours_no_parent()
-			while expand_cells.size() == 0:
-				if index + 1 < _cells.size():
-					index += 1
-					expand_cells = _cells[index].get_neighbours_no_parent()
-				else:
-					_cell_limit = _cells.size()
-					print("Blob appears to have filled the medium")
-					return true
-			# Of the potential cells, order by the most attached
-			expand_cells.sort_custom(self, "sort_desc_attachment")
-			# Grab the top one and "expand"
-			add_triangle_as_cell(expand_cells[0])
+			_blob_front.shuffle()  # Note: uses the global rng
+			add_triangle_as_cell(_blob_front.back())
 		
 		return false
 
@@ -339,9 +334,11 @@ func _process(_delta) -> void:
 	
 	base_grid.draw_grid(image, GRID_COLOR)
 	land_blob.draw_triangles(image, LAND_COLOR)
-	land_blob.expand_tick()
-	
 	imageTexture.create_from_image(image)
 	texture = imageTexture
+	
+	if not blob_done:
+		blob_done = land_blob.expand_tick()
+		return
 	
 
