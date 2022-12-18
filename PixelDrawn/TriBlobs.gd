@@ -5,6 +5,7 @@ onready var imageTexture := ImageTexture.new()
 onready var rng := RandomNumberGenerator.new()
 onready var ready := false
 onready var blob_done := false
+onready var edges_done := false
 
 const CELL_EDGE := 8.0
 const SEA_COLOR := Color8(32, 32, 128, 255)
@@ -73,6 +74,9 @@ class BasePoint:
 	func error() -> BasePoint:
 		printerr("Something needed a placeholder BasePoint")
 		return BasePoint.new(0.0, 0.0)
+	
+	func get_pos() -> Vector2:
+		return _pos
 
 
 class BaseLine:
@@ -102,6 +106,14 @@ class BaseLine:
 			return _b
 		return _a
 	
+	func draw_line_on_image(image: Image, col: Color) -> void:
+		var a := _a.get_pos()
+		var b := _b.get_pos()
+		var longest_side = int(max(abs(a.x - b.x), abs(a.y - b.y))) + 1
+		for p in range(longest_side):
+			var t = (1.0 / longest_side) * p
+			image.set_pixelv(lerp(a, b, t), col)
+
 	static func sort_vert_hortz(a: BaseLine, b: BaseLine) -> bool:
 		if BasePoint.sort_vert_hortz(a._a, b._a):
 			return true
@@ -157,11 +169,23 @@ class BaseTriangle:
 				parented_neighbours.append(neighbour)
 		return parented_neighbours
 	
+	func get_neighbour_borders_with_parent(parent: Object) -> Array:
+		var borders : Array = []
+		for edge in _edges:
+			for tri in edge.get_bordering_triangles():
+				if tri != self and tri.get_parent() == parent:
+					borders.append(edge)
+		return borders
+	
 	func count_neighbours_with_parent(parent: Object) -> int:
 		return get_neighbours_with_parent(parent).size()
 	
 	func get_neighbours_no_parent() -> Array:
 		return get_neighbours_with_parent(null)
+	
+	func draw_triangle_on_image(image: Image, color: Color) -> void:
+		for line in _edges:
+			line.draw_line_on_image(image, color)
 
 
 class BaseGrid:
@@ -232,24 +256,15 @@ class BaseGrid:
 		_grid_lines.append(new_line)
 		return new_line
 	
-	static func draw_line_on_image(image: Image, a: Vector2, b: Vector2, col: Color) -> void:
-		var longest_side = int(max(abs(a.x - b.x), abs(a.y - b.y))) + 1
-		for p in range(longest_side):
-			var t = (1.0 / longest_side) * p
-			image.set_pixelv(lerp(a, b, t), col)
-	
 	func draw_grid(image: Image, color: Color) -> void:
 		image.lock()
 		
 		for line in _grid_lines:
-			draw_line_on_image(image, line._a._pos, line._b._pos, color)
+			line.draw_line_on_image(image, color)
 		image.unlock()
 	
 	func get_cell_count() -> int:
 		return _cell_count
-		
-#	func get_triangle_closest_to(point: Vector2) -> BaseTriangle:
-#		pass
 	
 	func get_middle_triangle() -> BaseTriangle:
 		var mid_row = _grid_tris[_grid_tris.size() / 2]
@@ -262,12 +277,15 @@ class TriBlob:
 	var _rng: RandomNumberGenerator
 	var _cell_limit: int
 	var _blob_front: Array
+	var _perimeter: Array
 	
 	func _init(grid: BaseGrid, rng: RandomNumberGenerator, cell_limit: int = 1):
 		_grid = grid
 		_cells = []
 		_rng = rng
 		_cell_limit = cell_limit
+		_blob_front = []
+		_perimeter = []
 		var start = grid.get_middle_triangle()
 		add_triangle_as_cell(start)
 	
@@ -282,23 +300,31 @@ class TriBlob:
 			if not neighbour in _blob_front:
 				_blob_front.append(neighbour)
 	
-	static func draw_tri_points_on_image(image: Image, a: Vector2, b: Vector2, c: Vector2, color: Color) -> void:
-		BaseGrid.draw_line_on_image(image, a, b, color)
-		BaseGrid.draw_line_on_image(image, a, c, color)
-		BaseGrid.draw_line_on_image(image, b, c, color)
-	
-	static func draw_triangle_on_image(image: Image, triangle: BaseTriangle, color: Color) -> void:
-		var points := triangle.get_points()
-		draw_tri_points_on_image(image, points[0]._pos, points[1]._pos, points[2]._pos, color)
-	
 	func draw_triangles(image: Image, color: Color) -> void:
 		image.lock()
 		for cell in _cells:
-			draw_triangle_on_image(image, cell, color)
+			cell.draw_triangle_on_image(image, color)
 		image.unlock()
 	
-	func sort_desc_attachment(a: BaseTriangle, b: BaseTriangle) -> bool:
-		return a.count_neighbours_with_parent(self) > b.count_neighbours_with_parent(self)
+	func get_perimeter_lines() -> Array:
+		if _perimeter.empty():
+			# Using the _blob_front, get all the lines joining to parented cells
+			while not _blob_front.empty():
+				var outer_triangle = _blob_front.pop_back()
+				var borders : Array = outer_triangle.get_neighbour_borders_with_parent(self)
+				if borders.size() >= 3:
+					# Assimilate surrounded cells
+					_cells.append(outer_triangle)
+				else:
+					_perimeter.append_array(borders)
+				
+		return _perimeter
+	
+	func draw_perimeter_lines(image: Image, color: Color) -> void:
+		image.lock()
+		for line in get_perimeter_lines():
+			line.draw_line_on_image(image, color)
+		image.unlock()
 	
 	func expand_tick() -> bool:
 		if _cells.size() >= _cell_limit:
@@ -311,6 +337,8 @@ class TriBlob:
 			add_triangle_as_cell(_blob_front.back())
 		
 		return false
+	
+
 
 
 func _ready() -> void:
@@ -321,7 +349,7 @@ func _ready() -> void:
 	
 	base_grid = BaseGrid.new(CELL_EDGE, rect_size)
 	
-	var island_cells_count : int = (base_grid.get_cell_count() / 4) * 3
+	var island_cells_count : int = (base_grid.get_cell_count() / 2)
 
 	land_blob = TriBlob.new(base_grid, rng, island_cells_count)
 	
@@ -332,13 +360,20 @@ func _process(_delta) -> void:
 	if not ready:
 		return
 	
-	base_grid.draw_grid(image, GRID_COLOR)
-	land_blob.draw_triangles(image, LAND_COLOR)
-	imageTexture.create_from_image(image)
-	texture = imageTexture
-	
 	if not blob_done:
 		blob_done = land_blob.expand_tick()
+		base_grid.draw_grid(image, GRID_COLOR)
+		land_blob.draw_triangles(image, LAND_COLOR)
+		imageTexture.create_from_image(image)
+		texture = imageTexture
 		return
 	
+	if not edges_done:
+		edges_done = true
+		base_grid.draw_grid(image, GRID_COLOR)
+		land_blob.draw_triangles(image, LAND_COLOR)
+		land_blob.draw_perimeter_lines(image, COAST_COLOR)
+		imageTexture.create_from_image(image)
+		texture = imageTexture
+		return
 
