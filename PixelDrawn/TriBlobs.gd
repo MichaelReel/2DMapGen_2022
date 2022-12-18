@@ -7,7 +7,7 @@ onready var ready := false
 onready var blob_done := false
 onready var edges_done := false
 
-const CELL_EDGE := 8.0
+const CELL_EDGE := 32.0
 const SEA_COLOR := Color8(32, 32, 128, 255)
 const GRID_COLOR := Color8(40, 40, 136, 255)
 const COAST_COLOR := Color8(128, 128, 32, 255)
@@ -176,6 +176,16 @@ class BaseTriangle:
 				if tri != self and tri.get_parent() == parent:
 					borders.append(edge)
 		return borders
+		
+	func is_on_field_boundary() -> bool:
+		return len(_neighbours) < len(_edges)
+	
+	func get_edges_on_field_boundary() -> Array:
+		var boundary_edges : Array = []
+		for edge in _edges:
+			if len(edge.get_bordering_triangles()) == 1:
+				boundary_edges.append(edge)
+		return boundary_edges
 	
 	func count_neighbours_with_parent(parent: Object) -> int:
 		return get_neighbours_with_parent(parent).size()
@@ -243,7 +253,8 @@ class BaseGrid:
 						var third_line: BaseLine = third_point.connection_to_point(point)
 						tri_row.append(BaseTriangle.new(first_line, second_line, third_line))
 						_cell_count += 1
-			_grid_tris.append(tri_row)
+			if not tri_row.empty():
+				_grid_tris.append(tri_row)
 		
 		for tri_row in _grid_tris:
 			for tri in tri_row:
@@ -299,6 +310,9 @@ class TriBlob:
 		for neighbour in triangle.get_neighbours_no_parent():
 			if not neighbour in _blob_front:
 				_blob_front.append(neighbour)
+			
+		if triangle.is_on_field_boundary():
+			_perimeter.append_array(triangle.get_edges_on_field_boundary())
 	
 	func draw_triangles(image: Image, color: Color) -> void:
 		image.lock()
@@ -307,16 +321,15 @@ class TriBlob:
 		image.unlock()
 	
 	func get_perimeter_lines() -> Array:
-		if _perimeter.empty():
-			# Using the _blob_front, get all the lines joining to parented cells
-			while not _blob_front.empty():
-				var outer_triangle = _blob_front.pop_back()
-				var borders : Array = outer_triangle.get_neighbour_borders_with_parent(self)
-				if borders.size() >= 3:
-					# Assimilate surrounded cells
-					_cells.append(outer_triangle)
-				else:
-					_perimeter.append_array(borders)
+		# using the _blob_front, get all the lines joining to parented cells
+		while not _blob_front.empty():
+			var outer_triangle = _blob_front.pop_back()
+			var borders : Array = outer_triangle.get_neighbour_borders_with_parent(self)
+			if borders.size() >= 3:
+				# Assimilate surrounded cells
+				_cells.append(outer_triangle)
+			else:
+				_perimeter.append_array(borders)
 				
 		return _perimeter
 	
@@ -349,9 +362,9 @@ func _ready() -> void:
 	
 	base_grid = BaseGrid.new(CELL_EDGE, rect_size)
 	
-	var island_cells_count : int = (base_grid.get_cell_count() / 2)
+	var island_cells_target : int = (base_grid.get_cell_count() / 2)
 
-	land_blob = TriBlob.new(base_grid, rng, island_cells_count)
+	land_blob = TriBlob.new(base_grid, rng, island_cells_target)
 	
 	ready = true
 
