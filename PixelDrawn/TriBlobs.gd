@@ -6,19 +6,31 @@ onready var rng := RandomNumberGenerator.new()
 onready var ready := false
 onready var blob_done := false
 onready var edges_done := false
+onready var regions_done := false
 
-const CELL_EDGE := 32.0
+const CELL_EDGE := 16.0
 const SEA_COLOR := Color8(32, 32, 128, 255)
 const GRID_COLOR := Color8(40, 40, 136, 255)
 const COAST_COLOR := Color8(128, 128, 32, 255)
 const RIVER_COLOR := Color8(128, 32, 32, 255)
 const LAND_COLOR := Color8(32, 128, 32, 255)
 const CURSOR_COLOR := Color8(128, 32, 128, 255)
+
+const REGION_COLORS := [
+	Color8(  0,   0, 192, 255),
+	Color8(  0, 192,   0, 255),
+	Color8(192,   0,   0, 255),
+	Color8(  0, 192, 192, 255),
+	Color8(192, 192,   0, 255),
+	Color8(192,   0, 192, 255),
+]
+
 const FRAME_TIME_MILLIS := 30
 
 var base_grid: BaseGrid
 var land_blob: TriBlob
 var mouse_tracker: MouseTracker
+var region_manager: RegionManager
 
 
 class BasePoint:
@@ -362,6 +374,10 @@ class TriBlob:
 				
 		return _perimeter
 	
+	func get_some_triangles(count: int) -> Array:
+		"""This *could* be random, but for now will use the last added triangles"""
+		return _cells.slice(len(_cells)-count, len(_cells)-1)
+	
 	func draw_perimeter_lines(image: Image, color: Color) -> void:
 		image.lock()
 		for line in get_perimeter_lines():
@@ -395,6 +411,67 @@ class MouseTracker:
 		image.lock()
 		var triangle: BaseTriangle = _grid.get_nearest_triangle_to(_mouse_coords)
 		triangle.draw_triangle_on_image(image, color)
+		image.unlock()
+
+
+class Region:
+	var _parent: TriBlob
+	var _debug_color: Color
+	var _cells: Array
+	var _region_front: Array
+	
+	func _init(parent: TriBlob, start_triangle: BaseTriangle, debug_color: Color) -> void:
+		_parent = parent
+		_debug_color = debug_color
+		_cells = []
+		_region_front = [start_triangle]
+	
+	func expand_tick() -> bool:
+		if _region_front.empty():
+			return true
+		_region_front.shuffle()
+		add_triangle_as_cell(_region_front.back())
+		return false
+	
+	func add_triangle_as_cell(triangle: BaseTriangle) -> void:
+		triangle.set_parent(self)
+		_cells.append(triangle)
+		# Remove this one from the _blob_front
+		_region_front.erase(triangle)
+		# Add neighbours to _blob_front
+		for neighbour in triangle.get_neighbours_with_parent(_parent):
+			if not neighbour in _region_front:
+				_region_front.append(neighbour)
+
+	func draw_triangles(image: Image) -> void:
+		for cell in _cells:
+			cell.draw_triangle_on_image(image, _debug_color)
+
+
+class RegionManager:
+	var _regions: Array
+	
+	func _init(parent: TriBlob, colors: Array) -> void:
+		var start_triangles = parent.get_some_triangles(len(colors))
+		_regions = []
+		for i in range(len(colors)):
+			_regions.append(Region.new(parent, start_triangles[i], colors[i]))
+	
+	func expand_tick() -> bool:
+		var frame_end = OS.get_ticks_msec() + FRAME_TIME_MILLIS
+		
+		while OS.get_ticks_msec() < frame_end:
+			var done = true
+			for region in _regions:
+				if not region.expand_tick():
+					done = false
+			if done: return true
+		return false
+	
+	func draw_triangles(image: Image) -> void:
+		image.lock()
+		for region in _regions:
+			region.draw_triangles(image)
 		image.unlock()
 
 
@@ -432,10 +509,19 @@ func _process(_delta) -> void:
 		land_blob.draw_perimeter_lines(image, COAST_COLOR)
 		imageTexture.create_from_image(image)
 		texture = imageTexture
+		region_manager = RegionManager.new(land_blob, REGION_COLORS)
+	
+	elif not regions_done:
+		base_grid.draw_grid(image, GRID_COLOR)
+		land_blob.draw_perimeter_lines(image, COAST_COLOR)
+		regions_done = region_manager.expand_tick()
+		region_manager.draw_triangles(image)
+		imageTexture.create_from_image(image)
+		texture = imageTexture
 	
 	else:
 		base_grid.draw_grid(image, GRID_COLOR)
-		land_blob.draw_triangles(image, LAND_COLOR)
+		region_manager.draw_triangles(image)
 		land_blob.draw_perimeter_lines(image, COAST_COLOR)
 		mouse_tracker.update_mouse_coords(get_viewport().get_mouse_position())
 		mouse_tracker.draw_triangle_closest_to_mouse(image, CURSOR_COLOR)
