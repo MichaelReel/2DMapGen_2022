@@ -13,10 +13,12 @@ const GRID_COLOR := Color8(40, 40, 136, 255)
 const COAST_COLOR := Color8(128, 128, 32, 255)
 const RIVER_COLOR := Color8(128, 32, 32, 255)
 const LAND_COLOR := Color8(32, 128, 32, 255)
+const CURSOR_COLOR := Color8(128, 32, 128, 255)
 const FRAME_TIME_MILLIS := 30
 
 var base_grid: BaseGrid
 var land_blob: TriBlob
+var mouse_tracker: MouseTracker
 
 
 class BasePoint:
@@ -159,6 +161,9 @@ class BaseTriangle:
 	func get_parent() -> Object:
 		return _parent
 	
+	func get_pos() -> Vector2:
+		return _pos
+	
 	func set_parent(parent: Object) -> void:
 		_parent = parent
 
@@ -196,6 +201,16 @@ class BaseTriangle:
 	func draw_triangle_on_image(image: Image, color: Color) -> void:
 		for line in _edges:
 			line.draw_line_on_image(image, color)
+
+	func get_closest_neighbour_to(point: Vector2) -> BaseTriangle:
+		var closest = _neighbours[0]
+		var current_sqr_dist = point.distance_squared_to(closest.get_pos())
+		for neighbour in _neighbours.slice(1, _neighbours.size()):
+			var next_sqr_dist = point.distance_squared_to(neighbour.get_pos())
+			if next_sqr_dist < current_sqr_dist:
+				closest = neighbour
+				current_sqr_dist = next_sqr_dist
+		return closest
 
 
 class BaseGrid:
@@ -280,6 +295,20 @@ class BaseGrid:
 	func get_middle_triangle() -> BaseTriangle:
 		var mid_row = _grid_tris[_grid_tris.size() / 2]
 		return mid_row[mid_row.size() / 2]
+	
+	func get_nearest_triangle_to(point: Vector2) -> BaseTriangle:
+		# What are the coords again?
+		# For now: Just find a nearish one, then follow the neighbours until we get there
+		var nearest : BaseTriangle = get_middle_triangle()
+		var current_sqr_dist : float = point.distance_squared_to(nearest.get_pos())
+		var next_nearest : = nearest.get_closest_neighbour_to(point)
+		var next_sqr_dist : float = point.distance_squared_to(next_nearest.get_pos())
+		while point.distance_squared_to(next_nearest.get_pos()) < current_sqr_dist:
+			nearest = next_nearest
+			current_sqr_dist = next_sqr_dist
+			next_nearest = nearest.get_closest_neighbour_to(point)
+			next_sqr_dist = point.distance_squared_to(next_nearest.get_pos())
+		return nearest
 
 
 class TriBlob:
@@ -352,6 +381,21 @@ class TriBlob:
 		return false
 	
 
+class MouseTracker:
+	var _grid: BaseGrid
+	var _mouse_coords: Vector2
+	
+	func _init(grid: BaseGrid) -> void:
+		_grid = grid
+	
+	func update_mouse_coords(mouse_coords) -> void:
+		_mouse_coords = mouse_coords
+	
+	func draw_triangle_closest_to_mouse(image: Image, color: Color) -> void:
+		image.lock()
+		var triangle: BaseTriangle = _grid.get_nearest_triangle_to(_mouse_coords)
+		triangle.draw_triangle_on_image(image, color)
+		image.unlock()
 
 
 func _ready() -> void:
@@ -361,6 +405,7 @@ func _ready() -> void:
 	rng.seed = OS.get_system_time_msecs()
 	
 	base_grid = BaseGrid.new(CELL_EDGE, rect_size)
+	mouse_tracker = MouseTracker.new(base_grid)
 	
 	var island_cells_target : int = (base_grid.get_cell_count() / 2)
 
@@ -371,22 +416,28 @@ func _ready() -> void:
 func _process(_delta) -> void:
 	
 	if not ready:
-		return
+		pass
 	
-	if not blob_done:
+	elif not blob_done:
 		blob_done = land_blob.expand_tick()
 		base_grid.draw_grid(image, GRID_COLOR)
 		land_blob.draw_triangles(image, LAND_COLOR)
 		imageTexture.create_from_image(image)
 		texture = imageTexture
-		return
 	
-	if not edges_done:
+	elif not edges_done:
 		edges_done = true
 		base_grid.draw_grid(image, GRID_COLOR)
 		land_blob.draw_triangles(image, LAND_COLOR)
 		land_blob.draw_perimeter_lines(image, COAST_COLOR)
 		imageTexture.create_from_image(image)
 		texture = imageTexture
-		return
-
+	
+	else:
+		base_grid.draw_grid(image, GRID_COLOR)
+		land_blob.draw_triangles(image, LAND_COLOR)
+		land_blob.draw_perimeter_lines(image, COAST_COLOR)
+		mouse_tracker.update_mouse_coords(get_viewport().get_mouse_position())
+		mouse_tracker.draw_triangle_closest_to_mouse(image, CURSOR_COLOR)
+		imageTexture.create_from_image(image)
+		texture = imageTexture
