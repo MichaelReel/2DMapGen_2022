@@ -226,14 +226,16 @@ class BaseTriangle:
 
 
 class BaseGrid:
+	var _tri_side: float
+	var _tri_height: float
 	var _grid_points: Array = []  # Array of rows of points
 	var _grid_lines: Array = []
 	var _grid_tris: Array = []
 	var _cell_count: int = 0
 	
 	func _init(edge_size: float, rect_size: Vector2) -> void:
-		var tri_side = edge_size
-		var tri_height = sqrt(0.75 * (tri_side * tri_side))
+		_tri_side = edge_size
+		_tri_height = sqrt(0.75 * (_tri_side * _tri_side))
 #		 |\       h^2 + (s/2)^2 = s^2
 #		 | \s     h^2 = s^2 - (s/2)^2
 #		h|  \     h^2 = s^2 - (s^2 / 4)
@@ -241,12 +243,12 @@ class BaseGrid:
 #		  s/2     h^2 = ( 3/4 * s^2 )
 		
 		var row_ind: int = 0
-		for y in range (0.0 + tri_height, rect_size.y, tri_height):
+		for y in range (0.0 + _tri_height, rect_size.y, _tri_height):
 			var points_row: Array = []
 			var ind_offset: int = (row_ind % 2) * 2 - 1
-			var offset: float = (row_ind % 2) * (tri_side / 2.0)
+			var offset: float = (row_ind % 2) * (_tri_side / 2.0)
 			var col_ind: int = 0
-			for x in range(offset + (tri_side / 2.0), rect_size.x, tri_side):
+			for x in range(offset + (_tri_side / 2.0), rect_size.x, _tri_side):
 				var new_point = BasePoint.new(x, y)
 				var lines := []
 				points_row.append(new_point)
@@ -311,7 +313,11 @@ class BaseGrid:
 	func get_nearest_triangle_to(point: Vector2) -> BaseTriangle:
 		# What are the coords again?
 		# For now: Just find a nearish one, then follow the neighbours until we get there
-		var nearest : BaseTriangle = get_middle_triangle()
+		var grid_row = int(point.y / _tri_height)
+		var row_pos = int(point.x / _tri_side)
+		
+		
+		var nearest : BaseTriangle = _grid_tris[grid_row][row_pos]
 		var current_sqr_dist : float = point.distance_squared_to(nearest.get_pos())
 		var next_nearest : = nearest.get_closest_neighbour_to(point)
 		var next_sqr_dist : float = point.distance_squared_to(next_nearest.get_pos())
