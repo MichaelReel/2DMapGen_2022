@@ -1,5 +1,6 @@
 extends TextureRect
 
+onready var status_label := $RichTextLabel
 onready var image := Image.new()
 onready var imageTexture := ImageTexture.new()
 onready var rng := RandomNumberGenerator.new()
@@ -7,6 +8,7 @@ onready var ready := false
 onready var blob_done := false
 onready var edges_done := false
 onready var regions_done := false
+onready var borders_done := false
 
 const CELL_EDGE := 16.0
 const SEA_COLOR := Color8(32, 32, 128, 255)
@@ -152,10 +154,14 @@ class BaseTriangle:
 	var _neighbours: Array
 	var _parent: Object = null
 	var _pos: Vector2
+	var _index_row: int
+	var _index_col: int
 	
-	func _init(a: BaseLine, b: BaseLine, c: BaseLine) -> void:
+	func _init(a: BaseLine, b: BaseLine, c: BaseLine, index_col: int, index_row: int) -> void:
 		_points = [a.shared_point(b), a.shared_point(c), b.shared_point(c)]
 		_points.sort_custom(BasePoint, "sort_vert_hortz")
+		_index_col = index_col
+		_index_row = index_row
 		_edges = [a, b, c]
 		for edge in _edges:
 			edge.set_border_of(self)
@@ -224,6 +230,12 @@ class BaseTriangle:
 				current_sqr_dist = next_sqr_dist
 		return closest
 
+	func get_status() -> String:
+		var status : String = ""
+		status += "[b](%d, %d)[/b]\n" % [ _index_col, _index_row ]
+		status += "%s" % str(_pos)
+		
+		return status
 
 class BaseGrid:
 	var _tri_side: float
@@ -271,8 +283,10 @@ class BaseGrid:
 		
 		# Go through the points and create triangles "upstream"
 		# I.e.: Triangles together with points only greater than the current point
+		var tri_row_ind : int = 0
 		for row in _grid_points:
 			var tri_row : Array = []
+			var tri_col_ind : int = 0
 			for point in row:
 				# Get connections, find connects between higher points
 				for first_line in point.higher_connections():
@@ -280,10 +294,12 @@ class BaseGrid:
 					for second_line in second_point.higher_connections_to_point(point):
 						var third_point: BasePoint = second_line.other_point(second_point)
 						var third_line: BaseLine = third_point.connection_to_point(point)
-						tri_row.append(BaseTriangle.new(first_line, second_line, third_line))
+						tri_row.append(BaseTriangle.new(first_line, second_line, third_line, tri_col_ind, tri_row_ind))
 						_cell_count += 1
+						tri_col_ind += 1
 			if not tri_row.empty():
 				_grid_tris.append(tri_row)
+				tri_row_ind += 1
 		
 		for tri_row in _grid_tris:
 			for tri in tri_row:
@@ -406,9 +422,11 @@ class TriBlob:
 class MouseTracker:
 	var _grid: BaseGrid
 	var _mouse_coords: Vector2
+	var _status_label: RichTextLabel
 	
-	func _init(grid: BaseGrid) -> void:
+	func _init(grid: BaseGrid, status_label: RichTextLabel) -> void:
 		_grid = grid
+		_status_label = status_label
 	
 	func update_mouse_coords(mouse_coords) -> void:
 		_mouse_coords = mouse_coords
@@ -418,6 +436,10 @@ class MouseTracker:
 		var triangle: BaseTriangle = _grid.get_nearest_triangle_to(_mouse_coords)
 		triangle.draw_triangle_on_image(image, color)
 		image.unlock()
+		# Get triangle stats
+		var status_str : String = triangle.get_status()
+		_status_label.bbcode_enabled = true
+		_status_label.bbcode_text = status_str
 
 
 class Region:
@@ -425,6 +447,7 @@ class Region:
 	var _debug_color: Color
 	var _cells: Array
 	var _region_front: Array
+	var _border_cells: Array
 	
 	func _init(parent: TriBlob, start_triangle: BaseTriangle, debug_color: Color) -> void:
 		_parent = parent
@@ -451,7 +474,13 @@ class Region:
 
 	func draw_triangles(image: Image) -> void:
 		for cell in _cells:
-			cell.draw_triangle_on_image(image, _debug_color)
+			if not cell in _border_cells:
+				cell.draw_triangle_on_image(image, _debug_color)
+	
+	func find_borders() -> void:
+		for cell in _cells:
+			if cell.count_neighbours_with_parent(self) < 3:
+				_border_cells.append(cell)
 
 
 class RegionManager:
@@ -479,16 +508,21 @@ class RegionManager:
 		for region in _regions:
 			region.draw_triangles(image)
 		image.unlock()
+	
+	func find_borders() -> void:
+		for region in _regions:
+			region.find_borders()
 
 
 func _ready() -> void:
+	status_label.text = "Starting..."
 	image.create(int(rect_size.x), int(rect_size.y), false, Image.FORMAT_RGBA8)
 	image.fill(SEA_COLOR)
 #	rng.seed = hash("island")
 	rng.seed = OS.get_system_time_msecs()
 	
 	base_grid = BaseGrid.new(CELL_EDGE, rect_size)
-	mouse_tracker = MouseTracker.new(base_grid)
+	mouse_tracker = MouseTracker.new(base_grid, status_label)
 	
 	var island_cells_target : int = (base_grid.get_cell_count() / 2)
 
@@ -499,9 +533,10 @@ func _ready() -> void:
 func _process(_delta) -> void:
 	
 	if not ready:
-		pass
+		return
 	
 	elif not blob_done:
+		status_label.text = "Ready..."
 		blob_done = land_blob.expand_tick()
 		base_grid.draw_grid(image, GRID_COLOR)
 		land_blob.draw_triangles(image, LAND_COLOR)
@@ -509,6 +544,7 @@ func _process(_delta) -> void:
 		texture = imageTexture
 	
 	elif not edges_done:
+		status_label.text = "Island defined..."
 		edges_done = true
 		base_grid.draw_grid(image, GRID_COLOR)
 		land_blob.draw_triangles(image, LAND_COLOR)
@@ -518,6 +554,7 @@ func _process(_delta) -> void:
 		region_manager = RegionManager.new(land_blob, REGION_COLORS)
 	
 	elif not regions_done:
+		status_label.text = "Perimeter defined..."
 		base_grid.draw_grid(image, GRID_COLOR)
 		land_blob.draw_perimeter_lines(image, COAST_COLOR)
 		regions_done = region_manager.expand_tick()
@@ -525,7 +562,13 @@ func _process(_delta) -> void:
 		imageTexture.create_from_image(image)
 		texture = imageTexture
 	
+	elif not borders_done:
+		status_label.text = "Regions defined..."
+		borders_done = true
+		region_manager.find_borders()
+	
 	else:
+		status_label.text = ""
 		base_grid.draw_grid(image, GRID_COLOR)
 		region_manager.draw_triangles(image)
 		land_blob.draw_perimeter_lines(image, COAST_COLOR)
