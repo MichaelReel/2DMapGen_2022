@@ -11,8 +11,8 @@ onready var regions_done := false
 onready var borders_done := false
 
 const CELL_EDGE := 16.0
-const SEA_COLOR := Color8(32, 32, 128, 255)
-const GRID_COLOR := Color8(40, 40, 136, 255)
+const SEA_COLOR := Color8(32, 32, 64, 255)
+const GRID_COLOR := Color8(40, 40, 96, 255)
 const COAST_COLOR := Color8(128, 128, 32, 255)
 const RIVER_COLOR := Color8(128, 32, 32, 255)
 const LAND_COLOR := Color8(32, 128, 32, 255)
@@ -47,7 +47,8 @@ class BasePoint:
 		_connections.append(line)
 	
 	static func sort_vert_hortz(a: BasePoint, b: BasePoint) -> bool:
-		if a._pos.y < b._pos.y:
+		"""This will sort by Y desc, then X asc"""
+		if a._pos.y > b._pos.y:
 			return true
 		elif a._pos.y == b._pos.y and a._pos.x < b._pos.x:
 				return true
@@ -93,6 +94,18 @@ class BasePoint:
 	
 	func get_pos() -> Vector2:
 		return _pos
+		
+	func _get_line_ids() -> String:
+		var ids_string : String = ""
+		var first := true
+		for line in _connections:
+			ids_string += "" if first else ", "
+			first = false
+			ids_string += "%d" % line.get_instance_id()
+		return ids_string
+	
+	func _to_string() -> String:
+		return "%d: %s: { %s }" % [get_instance_id(), _pos, _get_line_ids()]
 
 
 class BaseLine:
@@ -146,6 +159,9 @@ class BaseLine:
 	
 	func get_bordering_triangles() -> Array:
 		return _borders
+	
+	func _to_string() -> String:
+		return "%d: { %d -> %d }" % [get_instance_id(), _a.get_instance_id(), _b.get_instance_id()]
 
 
 class BaseTriangle:
@@ -232,8 +248,10 @@ class BaseTriangle:
 
 	func get_status() -> String:
 		var status : String = ""
-		status += "[b](%d, %d)[/b]\n" % [ _index_col, _index_row ]
-		status += "%s" % str(_pos)
+		status += "[b][i](%d, %d)[/i][/b]\n" % [ _index_col, _index_row ]
+		status += "%s\n" % str(_pos)
+		status += "Points: [\n  %s,\n  %s,\n  %s\n]\n" % _points
+		status += "Lines: [\n  %s,\n  %s,\n  %s\n]\n" % _edges
 		
 		return status
 
@@ -254,6 +272,7 @@ class BaseGrid:
 #		 |___\    h^2 = (1 - 1/4) * s^2
 #		  s/2     h^2 = ( 3/4 * s^2 )
 		
+		# Lay out points and connect them to any existing points
 		var row_ind: int = 0
 		for y in range (0.0 + _tri_height, rect_size.y, _tri_height):
 			var points_row: Array = []
@@ -329,8 +348,10 @@ class BaseGrid:
 	func get_nearest_triangle_to(point: Vector2) -> BaseTriangle:
 		# What are the coords again?
 		# For now: Just find a nearish one, then follow the neighbours until we get there
-		var grid_row = int(point.y / _tri_height)
-		var row_pos = int(point.x / _tri_side)
+		var grid_row = int((point.y - _tri_height) / _tri_height)
+		grid_row = min(grid_row, len(_grid_tris) - 1)
+		var row_pos = int((point.x - _tri_side / 2.0) / _tri_side)
+		row_pos = min(row_pos, len(_grid_tris[grid_row]) - 1)
 		
 		
 		var nearest : BaseTriangle = _grid_tris[grid_row][row_pos]
