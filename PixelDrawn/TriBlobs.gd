@@ -245,14 +245,23 @@ class BaseTriangle:
 				closest = neighbour
 				current_sqr_dist = next_sqr_dist
 		return closest
+	
+	func _get_neighbour_ids() -> String:
+		var neighbour_ids : String = ""
+		var first := true
+		for neighbour in _neighbours:
+			neighbour_ids += "\n  " if first else ",\n  "
+			first = false
+			neighbour_ids += "%d" % neighbour.get_instance_id()
+		return neighbour_ids
 
 	func get_status() -> String:
 		var status : String = ""
-		status += "[b][i](%d, %d)[/i][/b]\n" % [ _index_col, _index_row ]
-		status += "%s\n" % str(_pos)
-		status += "Points: [\n  %s,\n  %s,\n  %s\n]\n" % _points
+		status += "%d (%d, %d) %s\n" % [ get_instance_id(), _index_col, _index_row, _pos ]
+		status += "Neighbours: [%s\n]" % _get_neighbour_ids()
 		status += "Lines: [\n  %s,\n  %s,\n  %s\n]\n" % _edges
-		
+		status += "Points: [\n  %s,\n  %s,\n  %s\n]\n" % _points
+		status += "Parent: %s" % _parent
 		return status
 
 class BaseGrid:
