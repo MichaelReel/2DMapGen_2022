@@ -38,6 +38,7 @@ var region_manager: RegionManager
 class BasePoint:
 	var _pos: Vector2
 	var _connections: Array
+	var _polygons: Array
 	
 	func _init(x: float, y: float) -> void:
 		_pos = Vector2(x, y)
@@ -45,6 +46,10 @@ class BasePoint:
 		
 	func add_connection(line: BaseLine) -> void:
 		_connections.append(line)
+	
+	func add_polygon(polygon: BaseTriangle) -> void:
+		if not polygon in _polygons:
+			_polygons.append(polygon)
 	
 	static func sort_vert_hortz(a: BasePoint, b: BasePoint) -> bool:
 		"""This will sort by Y desc, then X asc"""
@@ -94,6 +99,9 @@ class BasePoint:
 	
 	func get_pos() -> Vector2:
 		return _pos
+	
+	func get_cornering_triangles() -> Array:
+		return _polygons
 		
 	func _get_line_ids() -> String:
 		var ids_string : String = ""
@@ -168,6 +176,7 @@ class BaseTriangle:
 	var _points: Array
 	var _edges: Array
 	var _neighbours: Array
+	var _corner_neighbours: Array
 	var _parent: Object = null
 	var _pos: Vector2
 	var _index_row: int
@@ -179,6 +188,8 @@ class BaseTriangle:
 		_index_col = index_col
 		_index_row = index_row
 		_edges = [a, b, c]
+		for point in _points:
+			point.add_polygon(self)
 		for edge in _edges:
 			edge.set_border_of(self)
 		_pos = (_points[0]._pos + _points[1]._pos + _points[2]._pos) / 3.0
@@ -188,6 +199,10 @@ class BaseTriangle:
 			for tri in edge.get_bordering_triangles():
 				if tri != self:
 					_neighbours.append(tri)
+		for point in _points:
+			for tri in point.get_cornering_triangles():
+				if not tri in _neighbours and not tri in _corner_neighbours and not tri == self:
+					_corner_neighbours.append(tri)
 	
 	func get_points() -> Array:
 		return _points
@@ -207,6 +222,13 @@ class BaseTriangle:
 			if neighbour.get_parent() == parent:
 				parented_neighbours.append(neighbour)
 		return parented_neighbours
+
+	func get_corner_neighbours_with_parent(parent: Object) -> Array:
+		var parented_corner_neighbours = []
+		for corner_neighbour in _corner_neighbours:
+			if corner_neighbour.get_parent() == parent:
+				parented_corner_neighbours.append(corner_neighbour)
+		return parented_corner_neighbours
 	
 	func get_neighbour_borders_with_parent(parent: Object) -> Array:
 		var borders : Array = []
@@ -228,6 +250,9 @@ class BaseTriangle:
 	
 	func count_neighbours_with_parent(parent: Object) -> int:
 		return get_neighbours_with_parent(parent).size()
+	
+	func count_corner_neighbours_with_parent(parent: Object) -> int:
+		return get_corner_neighbours_with_parent(parent).size()
 	
 	func get_neighbours_no_parent() -> Array:
 		return get_neighbours_with_parent(null)
@@ -254,11 +279,21 @@ class BaseTriangle:
 			first = false
 			neighbour_ids += "%d" % neighbour.get_instance_id()
 		return neighbour_ids
+	
+	func _get_corner_neighbour_ids() -> String:
+		var corner_neighbour_ids : String = ""
+		var first := true
+		for corner_neighbour in _corner_neighbours:
+			corner_neighbour_ids += "\n  " if first else ",\n  "
+			first = false
+			corner_neighbour_ids += "%d" % corner_neighbour.get_instance_id()
+		return corner_neighbour_ids
 
 	func get_status() -> String:
 		var status : String = ""
 		status += "%d (%d, %d) %s\n" % [ get_instance_id(), _index_col, _index_row, _pos ]
-		status += "Neighbours: [%s\n]" % _get_neighbour_ids()
+		status += "Corner Neighbours: [%s\n]" % _get_corner_neighbour_ids()
+		status += "Edge Neighbours: [%s\n]" % _get_neighbour_ids()
 		status += "Lines: [\n  %s,\n  %s,\n  %s\n]\n" % _edges
 		status += "Points: [\n  %s,\n  %s,\n  %s\n]\n" % _points
 		status += "Parent: %s" % _parent
@@ -510,6 +545,8 @@ class Region:
 	func find_borders() -> void:
 		for cell in _cells:
 			if cell.count_neighbours_with_parent(self) < 3:
+				_border_cells.append(cell)
+			elif cell.count_corner_neighbours_with_parent(self) < 9:
 				_border_cells.append(cell)
 
 
