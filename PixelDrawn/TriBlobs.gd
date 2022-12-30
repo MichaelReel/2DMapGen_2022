@@ -3,12 +3,13 @@ extends TextureRect
 onready var status_label := $RichTextLabel
 onready var image := Image.new()
 onready var imageTexture := ImageTexture.new()
-onready var rng := RandomNumberGenerator.new()
 onready var ready := false
 onready var blob_done := false
 onready var edges_done := false
 onready var regions_done := false
+onready var sub_regions_done := false
 onready var borders_done := false
+onready var sub_borders_done := false
 
 const CELL_EDGE := 16.0
 const SEA_COLOR := Color8(32, 32, 64, 255)
@@ -27,12 +28,19 @@ const REGION_COLORS := [
 	Color8(192,   0, 192, 255),
 ]
 
+const SUB_REGION_COLORS := [
+	Color8(192, 128,  64, 255),
+	Color8( 64, 192, 128, 255),
+	Color8(128,  64, 192, 255),
+]
+
 const FRAME_TIME_MILLIS := 30
 
 var base_grid: BaseGrid
 var land_blob: TriBlob
 var mouse_tracker: MouseTracker
 var region_manager: RegionManager
+var sub_regions_manager: SubRegionManager
 
 
 class BasePoint:
@@ -413,15 +421,13 @@ class BaseGrid:
 class TriBlob:
 	var _grid: BaseGrid
 	var _cells: Array
-	var _rng: RandomNumberGenerator
 	var _cell_limit: int
 	var _blob_front: Array
 	var _perimeter: Array
 	
-	func _init(grid: BaseGrid, rng: RandomNumberGenerator, cell_limit: int = 1):
+	func _init(grid: BaseGrid, cell_limit: int = 1):
 		_grid = grid
 		_cells = []
-		_rng = rng
 		_cell_limit = cell_limit
 		_blob_front = []
 		_perimeter = []
@@ -478,7 +484,7 @@ class TriBlob:
 		var frame_end = OS.get_ticks_msec() + FRAME_TIME_MILLIS
 		
 		while OS.get_ticks_msec() < frame_end and _cells.size() < _cell_limit:
-			_blob_front.shuffle()  # Note: uses the global rng
+			_blob_front.shuffle()
 			add_triangle_as_cell(_blob_front.back())
 		
 		return false
@@ -512,7 +518,6 @@ class Region:
 	var _debug_color: Color
 	var _cells: Array
 	var _region_front: Array
-	var _border_cells: Array
 	
 	func _init(parent: TriBlob, start_triangle: BaseTriangle, debug_color: Color) -> void:
 		_parent = parent
@@ -536,18 +541,34 @@ class Region:
 		for neighbour in triangle.get_neighbours_with_parent(_parent):
 			if not neighbour in _region_front:
 				_region_front.append(neighbour)
-
+	
+	func remove_triangle_as_cell(triangle: BaseTriangle) -> void:
+			triangle.set_parent(_parent)
+			_cells.erase(triangle)
+	
 	func draw_triangles(image: Image) -> void:
 		for cell in _cells:
-			if not cell in _border_cells:
-				cell.draw_triangle_on_image(image, _debug_color)
+			cell.draw_triangle_on_image(image, _debug_color)
 	
 	func find_borders() -> void:
+		var border_cells: Array = []
 		for cell in _cells:
 			if cell.count_neighbours_with_parent(self) < 3:
-				_border_cells.append(cell)
+				border_cells.append(cell)
 			elif cell.count_corner_neighbours_with_parent(self) < 9:
-				_border_cells.append(cell)
+				border_cells.append(cell)
+		# Return the border cells to the parent
+		for border_cell in border_cells:
+			remove_triangle_as_cell(border_cell)
+	
+	func get_some_triangles(count: int) -> Array:
+		var random_cells = []
+		for _i in range(count):
+			random_cells.append(_cells[randi() % len(_cells)])
+		return random_cells
+	
+	func get_debug_color() -> Color:
+		return _debug_color
 
 
 class RegionManager:
@@ -579,21 +600,111 @@ class RegionManager:
 	func find_borders() -> void:
 		for region in _regions:
 			region.find_borders()
+	
+	func get_regions() -> Array:
+		return _regions
 
+
+# I feel like I will look into refactoring this with the above:
+class SubRegion:
+	var _parent: Region
+	var _debug_color: Color
+	var _cells: Array
+	var _region_front: Array
+	
+	func _init(parent: Region, start_triangle: BaseTriangle, debug_color: Color) -> void:
+		_parent = parent
+		_debug_color = debug_color
+		_cells = []
+		_region_front = [start_triangle]
+	
+	func expand_tick() -> bool:
+		if _region_front.empty():
+			return true
+		_region_front.shuffle()
+		add_triangle_as_cell(_region_front.back())
+		return false
+	
+	func add_triangle_as_cell(triangle: BaseTriangle) -> void:
+		triangle.set_parent(self)
+		_cells.append(triangle)
+		# Remove this one from the _blob_front
+		_region_front.erase(triangle)
+		# Add neighbours to _blob_front
+		for neighbour in triangle.get_neighbours_with_parent(_parent):
+			if not neighbour in _region_front:
+				_region_front.append(neighbour)
+	
+	func remove_triangle_as_cell(triangle: BaseTriangle) -> void:
+			triangle.set_parent(_parent)
+			_cells.erase(triangle)
+	
+	func draw_triangles(image: Image) -> void:
+		for cell in _cells:
+			cell.draw_triangle_on_image(image, _debug_color)
+	
+	func find_borders() -> void:
+		var border_cells: Array = []
+		for cell in _cells:
+			if cell.count_neighbours_with_parent(self) < 3:
+				border_cells.append(cell)
+			elif cell.count_corner_neighbours_with_parent(self) < 9:
+				border_cells.append(cell)
+		# Return the border cells to the parent
+		for border_cell in border_cells:
+			remove_triangle_as_cell(border_cell)
+	
+	func get_some_triangles(count: int) -> Array:
+		var random_cells = []
+		for _i in range(count):
+			random_cells.append(_cells[randi() % len(_cells)])
+		return random_cells
+
+
+class SubRegionManager:
+	var _regions: Array
+	
+	func _init(parent_manager: RegionManager, colors: Array) -> void:
+		_regions = []
+		for parent in parent_manager.get_regions():
+			var start_triangles = parent.get_some_triangles(len(colors))
+			for i in range(len(colors)):
+				_regions.append(SubRegion.new(parent, start_triangles[i], colors[i]))
+	
+	func expand_tick() -> bool:
+		var frame_end = OS.get_ticks_msec() + FRAME_TIME_MILLIS
+		
+		while OS.get_ticks_msec() < frame_end:
+			var done = true
+			for region in _regions:
+				if not region.expand_tick():
+					done = false
+			if done: return true
+		return false
+	
+	func draw_triangles(image: Image) -> void:
+		image.lock()
+		for region in _regions:
+			region.draw_triangles(image)
+		image.unlock()
+	
+	func find_borders() -> void:
+		for region in _regions:
+			region.find_borders()
+		
 
 func _ready() -> void:
 	status_label.text = "Starting..."
 	image.create(int(rect_size.x), int(rect_size.y), false, Image.FORMAT_RGBA8)
 	image.fill(SEA_COLOR)
-#	rng.seed = hash("island")
-	rng.seed = OS.get_system_time_msecs()
+	randomize()
 	
 	base_grid = BaseGrid.new(CELL_EDGE, rect_size)
 	mouse_tracker = MouseTracker.new(base_grid, status_label)
 	
 	var island_cells_target : int = (base_grid.get_cell_count() / 2)
 
-	land_blob = TriBlob.new(base_grid, rng, island_cells_target)
+	land_blob = TriBlob.new(base_grid, island_cells_target)
 	
 	ready = true
 
@@ -633,11 +744,27 @@ func _process(_delta) -> void:
 		status_label.text = "Regions defined..."
 		borders_done = true
 		region_manager.find_borders()
+		sub_regions_manager = SubRegionManager.new(region_manager, SUB_REGION_COLORS)
+	
+	elif not sub_regions_done:
+		status_label.text = "Region borderss defined..."
+		base_grid.draw_grid(image, GRID_COLOR)
+		land_blob.draw_perimeter_lines(image, COAST_COLOR)
+		sub_regions_done = sub_regions_manager.expand_tick()
+		sub_regions_manager.draw_triangles(image)
+		imageTexture.create_from_image(image)
+		texture = imageTexture
+	
+	elif not sub_borders_done:
+		status_label.text = "Sub Regions defined..."
+		sub_borders_done = true
+		sub_regions_manager.find_borders()
 	
 	else:
 		status_label.text = ""
 		base_grid.draw_grid(image, GRID_COLOR)
 		region_manager.draw_triangles(image)
+		sub_regions_manager.draw_triangles(image)
 		land_blob.draw_perimeter_lines(image, COAST_COLOR)
 		mouse_tracker.update_mouse_coords(get_viewport().get_mouse_position())
 		mouse_tracker.draw_triangle_closest_to_mouse(image, CURSOR_COLOR)
