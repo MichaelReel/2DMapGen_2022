@@ -10,6 +10,7 @@ onready var regions_done := false
 onready var sub_regions_done := false
 onready var borders_done := false
 onready var sub_borders_done := false
+onready var rivers_done := false
 
 const CELL_EDGE := 16.0
 const SEA_COLOR := Color8(32, 32, 64, 255)
@@ -18,6 +19,7 @@ const COAST_COLOR := Color8(128, 128, 32, 255)
 const RIVER_COLOR := Color8(128, 32, 32, 255)
 const LAND_COLOR := Color8(32, 128, 32, 255)
 const CURSOR_COLOR := Color8(128, 32, 128, 255)
+const RIVER_COUNT := 8
 
 const REGION_COLORS := [
 	Color8(  0,   0, 192, 255),
@@ -41,6 +43,7 @@ var land_blob: TriBlob
 var mouse_tracker: MouseTracker
 var region_manager: RegionManager
 var sub_regions_manager: SubRegionManager
+var river_manager: RiverManager
 
 
 class BasePoint:
@@ -120,6 +123,9 @@ class BasePoint:
 			ids_string += "%d" % line.get_instance_id()
 		return ids_string
 	
+	func get_connections() -> Array:
+		return _connections
+	
 	func _to_string() -> String:
 		return "%d: %s: { %s }" % [get_instance_id(), _pos, _get_line_ids()]
 
@@ -175,6 +181,19 @@ class BaseLine:
 	
 	func get_bordering_triangles() -> Array:
 		return _borders
+	
+	func center_in_ring(center: Vector2, min_distance: float, max_distance: float) -> bool:
+		var min_squared: float = min_distance * min_distance
+		var max_squared: float = max_distance * max_distance
+		var line_center: Vector2 = (_a.get_pos() + _b.get_pos()) / 2.0
+		var distance = line_center.distance_squared_to(center)
+		return distance >= min_squared and distance <= max_squared
+	
+	func end_point_farthest_from(target: Vector2) -> BasePoint:
+		if _a.get_pos().distance_squared_to(target) >= _b.get_pos().distance_squared_to(target):
+			return _a
+		else:
+			return _b
 	
 	func _to_string() -> String:
 		return "%d: { %d -> %d }" % [get_instance_id(), _a.get_instance_id(), _b.get_instance_id()]
@@ -314,8 +333,11 @@ class BaseGrid:
 	var _grid_lines: Array = []
 	var _grid_tris: Array = []
 	var _cell_count: int = 0
+	var _center: Vector2
+	var _near_center_edges: Array = []
 	
 	func _init(edge_size: float, rect_size: Vector2) -> void:
+		_center = rect_size / 2.0
 		_tri_side = edge_size
 		_tri_height = sqrt(0.75 * (_tri_side * _tri_side))
 #		 |\       h^2 + (s/2)^2 = s^2
@@ -381,6 +403,8 @@ class BaseGrid:
 		a.add_connection(new_line)
 		b.add_connection(new_line)
 		_grid_lines.append(new_line)
+		if new_line.center_in_ring(_center, 0.0, CELL_EDGE * 10.0):
+			_near_center_edges.append(new_line)
 		return new_line
 	
 	func draw_grid(image: Image, color: Color) -> void:
@@ -405,7 +429,6 @@ class BaseGrid:
 		var row_pos = int((point.x - _tri_side / 2.0) / _tri_side)
 		row_pos = min(row_pos, len(_grid_tris[grid_row]) - 1)
 		
-		
 		var nearest : BaseTriangle = _grid_tris[grid_row][row_pos]
 		var current_sqr_dist : float = point.distance_squared_to(nearest.get_pos())
 		var next_nearest : = nearest.get_closest_neighbour_to(point)
@@ -416,6 +439,13 @@ class BaseGrid:
 			next_nearest = nearest.get_closest_neighbour_to(point)
 			next_sqr_dist = point.distance_squared_to(next_nearest.get_pos())
 		return nearest
+	
+	func get_river_head() -> BaseLine:
+		_near_center_edges.shuffle()
+		return _near_center_edges.pop_back()
+	
+	func get_center() -> Vector2:
+		return _center
 
 
 class TriBlob:
@@ -691,7 +721,49 @@ class SubRegionManager:
 	func find_borders() -> void:
 		for region in _regions:
 			region.find_borders()
+
+
+class RiverManager:
+	var _rivers: Array
+	var _grid: BaseGrid
+	
+	func _init(grid:BaseGrid, river_count: int) -> void:
+		_grid = grid
+		_rivers = []
+		for _i in range(river_count):
+			_rivers.append(create_river())
+	
+	func create_river() -> Array:
+		"""Create a chain of edges from near center to outer bounds"""
+		var center := _grid.get_center()
+		var start_edge := _grid.get_river_head()
+		var river := [start_edge]
+		# get furthest end from center, then extend the river until it hits the boundary
+		var connection_point: BasePoint = start_edge.end_point_farthest_from(center)
+		while len(connection_point.get_connections()) >= 6:
+			# Get a random edge that moves away from the center
+			var connections: Array = Array(connection_point.get_connections())
+			connections.shuffle()
+			var try_edge : BaseLine = connections.pop_back()
+			while not connections.empty() and try_edge.end_point_farthest_from(center) == connection_point:
+				try_edge = connections.pop_back()
+			# This shouldn't happen:
+			if try_edge.end_point_farthest_from(center) == connection_point:
+				printerr("All edges point towards the center")
+			
+			# Move along the random edge
+			river.append(try_edge)
+			connection_point = try_edge.other_point(connection_point)
 		
+		return river
+		
+	func draw_rivers(image: Image, color: Color) -> void:
+		image.lock()
+		for river in _rivers:
+			for edge in river:
+				edge.draw_line_on_image(image, color)
+		image.unlock()
+
 
 func _ready() -> void:
 	status_label.text = "Starting..."
@@ -747,7 +819,7 @@ func _process(_delta) -> void:
 		sub_regions_manager = SubRegionManager.new(region_manager, SUB_REGION_COLORS)
 	
 	elif not sub_regions_done:
-		status_label.text = "Region borderss defined..."
+		status_label.text = "Region borders defined..."
 		base_grid.draw_grid(image, GRID_COLOR)
 		land_blob.draw_perimeter_lines(image, COAST_COLOR)
 		sub_regions_done = sub_regions_manager.expand_tick()
@@ -756,15 +828,21 @@ func _process(_delta) -> void:
 		texture = imageTexture
 	
 	elif not sub_borders_done:
-		status_label.text = "Sub Regions defined..."
+		status_label.text = "Sub regions defined..."
 		sub_borders_done = true
 		sub_regions_manager.find_borders()
+	
+	elif not rivers_done:
+		status_label.text = "Sub region borders defined..."
+		rivers_done = true
+		river_manager = RiverManager.new(base_grid, RIVER_COUNT)
 	
 	else:
 		status_label.text = ""
 		base_grid.draw_grid(image, GRID_COLOR)
 		region_manager.draw_triangles(image)
 		sub_regions_manager.draw_triangles(image)
+		river_manager.draw_rivers(image, RIVER_COLOR)
 		land_blob.draw_perimeter_lines(image, COAST_COLOR)
 		mouse_tracker.update_mouse_coords(get_viewport().get_mouse_position())
 		mouse_tracker.draw_triangle_closest_to_mouse(image, CURSOR_COLOR)
