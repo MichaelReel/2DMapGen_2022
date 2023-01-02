@@ -669,9 +669,9 @@ class SubRegion:
 			triangle.set_parent(_parent)
 			_cells.erase(triangle)
 	
-	func draw_triangles(image: Image) -> void:
+	func draw_triangles(image: Image, color: Color = self._debug_color) -> void:
 		for cell in _cells:
-			cell.draw_triangle_on_image(image, _debug_color)
+			cell.draw_triangle_on_image(image, color)
 	
 	func find_borders() -> void:
 		var border_cells: Array = []
@@ -721,14 +721,24 @@ class SubRegionManager:
 	func find_borders() -> void:
 		for region in _regions:
 			region.find_borders()
+	
+	func sub_region_for_edge(edge: BaseLine):
+		for tri in edge.get_bordering_triangles():
+			var sub_region = tri.get_parent()
+			if sub_region in _regions:
+				return sub_region
+		
+		return null
 
 
 class RiverManager:
 	var _rivers: Array
 	var _grid: BaseGrid
+	var _subregion_manager: SubRegionManager
 	
-	func _init(grid:BaseGrid, river_count: int) -> void:
+	func _init(grid:BaseGrid, subregion_manager: SubRegionManager, river_count: int) -> void:
 		_grid = grid
+		_subregion_manager = subregion_manager
 		_rivers = []
 		for _i in range(river_count):
 			_rivers.append(create_river())
@@ -756,12 +766,23 @@ class RiverManager:
 			connection_point = try_edge.other_point(connection_point)
 		
 		return river
+	
+	func identify_lakes_on_course(river: Array) -> Array:
+		var lakes := []
+		for edge in river:
+			var lake = _subregion_manager.sub_region_for_edge(edge)
+			if lake != null and not lake in lakes:
+				lakes.append(lake)
+		return lakes
 		
 	func draw_rivers(image: Image, color: Color) -> void:
 		image.lock()
 		for river in _rivers:
 			for edge in river:
 				edge.draw_line_on_image(image, color)
+			var lakes := identify_lakes_on_course(river)
+			for lake in lakes:
+				lake.draw_triangles(image)
 		image.unlock()
 
 
@@ -835,13 +856,13 @@ func _process(_delta) -> void:
 	elif not rivers_done:
 		status_label.text = "Sub region borders defined..."
 		rivers_done = true
-		river_manager = RiverManager.new(base_grid, RIVER_COUNT)
+		river_manager = RiverManager.new(base_grid, sub_regions_manager, RIVER_COUNT)
 	
 	else:
 		status_label.text = ""
 		base_grid.draw_grid(image, GRID_COLOR)
-		region_manager.draw_triangles(image)
-		sub_regions_manager.draw_triangles(image)
+#		region_manager.draw_triangles(image)
+#		sub_regions_manager.draw_triangles(image)
 		river_manager.draw_rivers(image, RIVER_COLOR)
 		land_blob.draw_perimeter_lines(image, COAST_COLOR)
 		mouse_tracker.update_mouse_coords(get_viewport().get_mouse_position())
