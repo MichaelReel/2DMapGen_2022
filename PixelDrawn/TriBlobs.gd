@@ -16,7 +16,7 @@ const CELL_EDGE := 16.0
 const SEA_COLOR := Color8(32, 32, 64, 255)
 const GRID_COLOR := Color8(40, 40, 96, 255)
 const COAST_COLOR := Color8(128, 128, 32, 255)
-const RIVER_COLOR := Color8(128, 32, 32, 255)
+const RIVER_COLOR := SEA_COLOR  # Color8(128, 32, 32, 255)
 const LAND_COLOR := Color8(32, 128, 32, 255)
 const CURSOR_COLOR := Color8(128, 32, 128, 255)
 const RIVER_COUNT := 8
@@ -37,6 +37,7 @@ const SUB_REGION_COLORS := [
 ]
 
 const FRAME_TIME_MILLIS := 30
+const SLOPE := sqrt(1.0 / 3.0)
 
 var base_grid: BaseGrid
 var land_blob: TriBlob
@@ -62,7 +63,7 @@ class BasePoint:
 		if not polygon in _polygons:
 			_polygons.append(polygon)
 	
-	static func sort_vert_hortz(a: BasePoint, b: BasePoint) -> bool:
+	static func sort_vert_inv_hortz(a: BasePoint, b: BasePoint) -> bool:
 		"""This will sort by Y desc, then X asc"""
 		if a._pos.y > b._pos.y:
 			return true
@@ -78,7 +79,7 @@ class BasePoint:
 		var higher_conns = []
 		for con in _connections:
 			var other = con.other_point(self)
-			if sort_vert_hortz(self, other):
+			if sort_vert_inv_hortz(self, other):
 				higher_conns.append(con)
 		return higher_conns
 
@@ -87,7 +88,7 @@ class BasePoint:
 		var higher_conns = []
 		for con in _connections:
 			var other = con.other_point(self)
-			if sort_vert_hortz(self, other):
+			if sort_vert_inv_hortz(self, other):
 				if other.has_connection_to_point(point):
 					higher_conns.append(con)
 		return higher_conns
@@ -136,7 +137,7 @@ class BaseLine:
 	var _borders: Array
 	
 	func _init(a: BasePoint, b: BasePoint) -> void:
-		if BasePoint.sort_vert_hortz(a, b):
+		if BasePoint.sort_vert_inv_hortz(a, b):
 			_a = a
 			_b = b
 		else:
@@ -287,7 +288,62 @@ class BaseTriangle:
 	func draw_triangle_on_image(image: Image, color: Color) -> void:
 		for line in _edges:
 			line.draw_line_on_image(image, color)
-
+		draw_filled_triangle_on_image(image, color)
+	
+	# Can use special-case flat top and bottom triangle fill algorithms for filling
+	# E.g.: http://www.sunshine2k.de/coding/java/TriangleRasterization/TriangleRasterization.html
+	
+	func _draw_filled_flat_top_triangle_on_image(image: Image, color: Color) -> void:
+		# Flat topped triangles are created with points (p) and edges (e) in a specific orders
+		#              e1 
+		#         p0 ------ p2     slope of e2 will always be half the side, divided by the height
+		#           \      /       slope of e0 will be the negative of e2
+		#         e0 \    / e2     SLOPE_e2 = (tri_side / 2) / sqrt(0.75 * (tri_side * tri_side))
+		#             \  /         SLOPE_e2 = tri_side / ( 2 * sqrt(0.75) * tri_side )
+		#              p1          SLOPE_e2 = 1 / sqrt(0.75 * 4)
+		
+		var start_x : float = _points[0].get_pos().x
+		var end_x : float = _points[2].get_pos().x
+		var start_y : int = int(_points[0].get_pos().y)
+		var end_y : int = int(_points[1].get_pos().y)
+		
+		for y in range(start_y, end_y + 1):
+			for x in range(int(start_x), int(end_x) + 1):
+				image.set_pixel(x, y, color)
+			start_x += SLOPE
+			end_x -= SLOPE
+		
+	func _draw_filled_flat_bottom_triangle_on_image(image: Image, color: Color) -> void:
+		# Flat bottomed triangles are created with points (p) and edges (e) in a specific orders
+		#              p2 
+		#             /  \
+		#         e2 /    \ e1
+		#           /      \
+		#         p1 ------ p0
+		#              e0
+		
+		var start_x : float = _points[2].get_pos().x
+		var end_x : float = _points[2].get_pos().x
+		var start_y : int = int(_points[2].get_pos().y)
+		var end_y : int = int(_points[1].get_pos().y)
+		
+		for y in range(start_y, end_y + 1):
+			for x in range(int(start_x), int(end_x) + 1):
+				image.set_pixel(x, y, color)
+			start_x -= SLOPE
+			end_x += SLOPE
+		
+	func _is_flat_topped() -> bool:
+		"""False implies flat bottomed as the grid only has this orientation"""
+		# If the first and last points are on the same y axis, this is flat topped
+		return _points[0].get_pos().y == _points[2].get_pos().y
+	
+	func draw_filled_triangle_on_image(image: Image, color: Color) -> void:
+		if _is_flat_topped():
+			_draw_filled_flat_top_triangle_on_image(image, color)
+		else:
+			_draw_filled_flat_bottom_triangle_on_image(image, color)
+	
 	func get_closest_neighbour_to(point: Vector2) -> BaseTriangle:
 		var closest = _neighbours[0]
 		var current_sqr_dist = point.distance_squared_to(closest.get_pos())
@@ -339,12 +395,15 @@ class BaseGrid:
 	func _init(edge_size: float, rect_size: Vector2) -> void:
 		_center = rect_size / 2.0
 		_tri_side = edge_size
-		_tri_height = sqrt(0.75 * (_tri_side * _tri_side))
-#		 |\       h^2 + (s/2)^2 = s^2
-#		 | \s     h^2 = s^2 - (s/2)^2
-#		h|  \     h^2 = s^2 - (s^2 / 4)
-#		 |___\    h^2 = (1 - 1/4) * s^2
-#		  s/2     h^2 = ( 3/4 * s^2 )
+		_tri_height = sqrt(0.75) * _tri_side
+		
+#		 |\         h^2 + (s/2)^2 = s^2
+#		 | \        h^2 = s^2 - (s/2)^2
+#		 |  \s      h^2 = s^2 - (s^2 / 4)
+#		h|   \      h^2 = (1 - 1/4) * s^2
+#		 |    \     h^2 = ( 3/4 * s^2 )
+#		 |_____\      h = sqrt(3/4 * s^2)
+#		  (s/2)       h = sqrt(3/4) * s
 		
 		# Lay out points and connect them to any existing points
 		var row_ind: int = 0
@@ -768,6 +827,9 @@ class RiverManager:
 		return river
 	
 	func identify_lakes_on_course(river: Array) -> Array:
+		# TODO: Need to modify - want to only draw the river parts that aren't between 
+		# the first entry edge on the lake and the last exit edge on the lake
+		# Maybe even split rivers
 		var lakes := []
 		for edge in river:
 			var lake = _subregion_manager.sub_region_for_edge(edge)
@@ -782,7 +844,7 @@ class RiverManager:
 				edge.draw_line_on_image(image, color)
 			var lakes := identify_lakes_on_course(river)
 			for lake in lakes:
-				lake.draw_triangles(image)
+				lake.draw_triangles(image, color)
 		image.unlock()
 
 
@@ -860,9 +922,11 @@ func _process(_delta) -> void:
 	
 	else:
 		status_label.text = ""
+		image.fill(SEA_COLOR)
 		base_grid.draw_grid(image, GRID_COLOR)
 #		region_manager.draw_triangles(image)
 #		sub_regions_manager.draw_triangles(image)
+		land_blob.draw_triangles(image, LAND_COLOR)
 		river_manager.draw_rivers(image, RIVER_COLOR)
 		land_blob.draw_perimeter_lines(image, COAST_COLOR)
 		mouse_tracker.update_mouse_coords(get_viewport().get_mouse_position())
