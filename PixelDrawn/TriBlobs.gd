@@ -12,7 +12,7 @@ onready var borders_done := false
 onready var sub_borders_done := false
 onready var rivers_done := false
 
-const CELL_EDGE := 16.0
+const CELL_EDGE := 12.0
 const SEA_COLOR := Color8(32, 32, 64, 255)
 const GRID_COLOR := Color8(40, 40, 96, 255)
 const COAST_COLOR := Color8(128, 128, 32, 255)
@@ -82,7 +82,7 @@ class BasePoint:
 			if sort_vert_inv_hortz(self, other):
 				higher_conns.append(con)
 		return higher_conns
-
+	
 	func higher_connections_to_point(point) -> Array:
 		# Return connection lines to "higher" points that connect to a given point
 		var higher_conns = []
@@ -92,13 +92,13 @@ class BasePoint:
 				if other.has_connection_to_point(point):
 					higher_conns.append(con)
 		return higher_conns
-
+	
 	func has_connection_to_point(point) -> bool:
 		for con in _connections:
 			if con.other_point(self) == point:
 				return true
 		return false
-
+	
 	func connection_to_point(point) -> BaseLine:
 		for con in _connections:
 			if con.other_point(self) == point:
@@ -147,7 +147,7 @@ class BaseLine:
 	
 	func get_points() -> Array:
 		return [_a, _b]
-
+	
 	func shared_point(other: BaseLine) -> BasePoint:
 		if self._a == other._a or self._a == other._b:
 			return self._a
@@ -177,7 +177,7 @@ class BaseLine:
 		for p in range(longest_side):
 			var t = (1.0 / longest_side) * p
 			image.set_pixelv(lerp(a, b, t), col)
-
+	
 	static func sort_vert_hortz(a: BaseLine, b: BaseLine) -> bool:
 		if BasePoint.sort_vert_hortz(a._a, b._a):
 			return true
@@ -233,7 +233,7 @@ class BaseTriangle:
 		for edge in _edges:
 			edge.set_border_of(self)
 		_pos = (_points[0]._pos + _points[1]._pos + _points[2]._pos) / 3.0
-
+	
 	func update_neighbours_from_edges() -> void:
 		for edge in _edges:
 			for tri in edge.get_bordering_triangles():
@@ -247,6 +247,12 @@ class BaseTriangle:
 	func get_points() -> Array:
 		return _points
 	
+	func get_edges() -> Array:
+		return _edges
+	
+	func get_neighbours() -> Array:
+		return _neighbours
+	
 	func get_parent() -> Object:
 		return _parent
 	
@@ -255,14 +261,14 @@ class BaseTriangle:
 	
 	func set_parent(parent: Object) -> void:
 		_parent = parent
-
+	
 	func get_neighbours_with_parent(parent: Object) -> Array:
 		var parented_neighbours = []
 		for neighbour in _neighbours:
 			if neighbour.get_parent() == parent:
 				parented_neighbours.append(neighbour)
 		return parented_neighbours
-
+	
 	func get_corner_neighbours_with_parent(parent: Object) -> Array:
 		var parented_corner_neighbours = []
 		for corner_neighbour in _corner_neighbours:
@@ -344,7 +350,7 @@ class BaseTriangle:
 				image.set_pixel(x, y, color)
 			start_x -= SLOPE
 			end_x += SLOPE
-		
+	
 	func _is_flat_topped() -> bool:
 		"""False implies flat bottomed as the grid only has this orientation"""
 		# If the first and last points are on the same y axis, this is flat topped
@@ -383,7 +389,7 @@ class BaseTriangle:
 			first = false
 			corner_neighbour_ids += "%d" % corner_neighbour.get_instance_id()
 		return corner_neighbour_ids
-
+	
 	func get_status() -> String:
 		var status : String = ""
 		status += "%d (%d, %d) %s\n" % [ get_instance_id(), _index_col, _index_row, _pos ]
@@ -525,6 +531,7 @@ class TriBlob:
 	var _cell_limit: int
 	var _blob_front: Array
 	var _perimeter: Array
+	var _perimeter_done : bool
 	
 	func _init(grid: BaseGrid, cell_limit: int = 1):
 		_grid = grid
@@ -532,6 +539,7 @@ class TriBlob:
 		_cell_limit = cell_limit
 		_blob_front = []
 		_perimeter = []
+		_perimeter_done = false
 		var start = grid.get_middle_triangle()
 		add_triangle_as_cell(start)
 	
@@ -633,14 +641,40 @@ class TriBlob:
 		
 		return chains
 	
-	func get_perimeter_lines() -> Array:
+	func _add_non_perimeter_boundaries() -> void:
+		"""
+		Find triangles on the boundary front that aren't against the perimeter and
+		assume they're inside the total shape. Add them and any unparented neighbours
+		to the blob. 
+		"""
+		var remove_from_front: Array = []
+		for front_triangle in _blob_front:
+			var has_edge_in_perimeter := false
+			for edge in front_triangle.get_edges():
+				if edge in _perimeter:
+					has_edge_in_perimeter = true
+					break
+			if not has_edge_in_perimeter:
+				front_triangle.set_parent(self)
+				_cells.append(front_triangle)
+				remove_from_front.append(front_triangle)
+				# Is there are any triangles adjacent that are null parented, add to _blob_front
+				for neighbour_triangle in front_triangle.get_neighbours():
+					if neighbour_triangle.get_parent() == null and not neighbour_triangle in _blob_front:
+						_blob_front.append(neighbour_triangle)
 		
-		if _blob_front.empty():
+		for front_triangle in remove_from_front:
+			_blob_front.erase(front_triangle)
+	
+	func get_perimeter_lines() -> Array:
+		if _perimeter_done:
 			return _perimeter
 		
+		var blob_front := _blob_front.duplicate()
+		
 		# using the _blob_front, get all the lines joining to parented cells
-		while not _blob_front.empty():
-			var outer_triangle = _blob_front.pop_back()
+		while not blob_front.empty():
+			var outer_triangle = blob_front.pop_back()
 			var borders : Array = outer_triangle.get_neighbour_borders_with_parent(self)
 			_perimeter.append_array(borders)
 		
@@ -654,6 +688,10 @@ class TriBlob:
 				max_chain = chain
 		_perimeter = max_chain
 		
+		# Include threshold triangles that are not on the perimeter path
+		_add_non_perimeter_boundaries()
+		
+		_perimeter_done = true
 		return _perimeter
 	
 	func get_some_triangles(count: int) -> Array:
@@ -958,7 +996,7 @@ func _ready() -> void:
 	mouse_tracker = MouseTracker.new(base_grid, status_label)
 	
 	var island_cells_target : int = (base_grid.get_cell_count() / 2)
-
+	
 	land_blob = TriBlob.new(base_grid, island_cells_target)
 	
 	ready = true
@@ -979,6 +1017,7 @@ func _process(_delta) -> void:
 	elif not edges_done:
 		status_label.text = "Island defined..."
 		edges_done = true
+		image.fill(SEA_COLOR)
 		base_grid.draw_grid(image, GRID_COLOR)
 		land_blob.draw_triangles(image, LAND_COLOR)
 		land_blob.draw_perimeter_lines(image, COAST_COLOR)
