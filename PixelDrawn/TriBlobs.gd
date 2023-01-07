@@ -144,6 +144,9 @@ class BaseLine:
 			_a = b
 			_b = a
 		_borders = []
+	
+	func get_points() -> Array:
+		return [_a, _b]
 
 	func shared_point(other: BaseLine) -> BasePoint:
 		if self._a == other._a or self._a == other._b:
@@ -152,6 +155,15 @@ class BaseLine:
 			return _b
 		else:
 			return BasePoint.error()
+	
+	func shares_a_point_with(other: BaseLine) -> bool:
+		return (
+			other.has_point(_a) or
+			other.has_point(_b)
+		)
+	
+	func has_point(point: BasePoint) -> bool:
+		return _a == point or _b == point
 	
 	func other_point(this: BasePoint) -> BasePoint:
 		if this == _a:
@@ -542,18 +554,106 @@ class TriBlob:
 		for cell in _cells:
 			cell.draw_triangle_on_image(image, color)
 		image.unlock()
+
+	static func _get_chains_from_lines(perimeter: Array) -> Array:
+		"""
+		Given an array of unordered BaseLines on the perimeter of a shape
+		Return an array, each element of which is an array of BaseLines ordered by
+		the path around the perimeter. One of the arrays will be the outer shape and the
+		rest will be internal "holes" in the shape.
+		"""
+		var perimeter_lines := perimeter.duplicate()
+		# Identify chains by tracking each point in series of perimeter lines
+		var chains: Array = []
+		while not perimeter_lines.empty():
+			# Next chain, pick the end of a line
+			var chain_done = false
+			var chain_flipped = false
+			var chain: Array = []
+			var next_chain_line: BaseLine = perimeter_lines.pop_back()
+			var start_chain_point: BasePoint = next_chain_line.get_points().front()
+			var next_chain_point: BasePoint = next_chain_line.other_point(start_chain_point)
+			# Follow the lines until we reach back to the beginning
+			while not chain_done:
+				chain.append(next_chain_line)
+				
+				# Do we have a complete chain now?
+				if len(chain) >= 3 and chain.front().shares_a_point_with(chain.back()):
+					chains.append(chain)
+					chain_done = true
+					continue
+				
+				# Which directions can we go from here?
+				var connections = next_chain_point.get_connections()
+				var directions: Array = []
+				for line in connections:
+					# Skip the current line
+					if line == next_chain_line:
+						continue
+					if perimeter_lines.has(line):
+						directions.append(line)
+				
+				# If there's no-where to go, something went wrong
+				if len(directions) <= 0:
+					printerr("FFS: This line goes nowhere!")
+				
+				# If there's only one way to go, go that way
+				elif len(directions) == 1:
+					next_chain_line = directions.front()
+					next_chain_point = next_chain_line.other_point(next_chain_point)
+					perimeter_lines.erase(next_chain_line)
+				
+				else:
+					# Any links that link back to start of the current chain?
+					var loop = false
+					for line in directions:
+						if line.other_point(next_chain_point) == start_chain_point:
+							loop = true
+							next_chain_line = line
+							next_chain_point = next_chain_line.other_point(next_chain_point)
+							perimeter_lines.erase(line)
+					
+					if not loop:
+						# Multiple directions with no obvious loop, 
+						# Reverse the chain to extend it in the opposite direction
+						if chain_flipped:
+							# This chain has already been flipped, both ends are trapped
+							# Push this chain back into the pool of lines and try again
+							chain.append_array(perimeter_lines)
+							perimeter_lines = chain
+							chain_done = true
+							continue
+						
+						chain.invert()
+						var old_start_point : BasePoint = start_chain_point
+						start_chain_point = next_chain_point
+						next_chain_line = chain.pop_back()
+						next_chain_point = old_start_point
+						chain_flipped = true
+		
+		return chains
 	
 	func get_perimeter_lines() -> Array:
+		
+		if _blob_front.empty():
+			return _perimeter
+		
 		# using the _blob_front, get all the lines joining to parented cells
 		while not _blob_front.empty():
 			var outer_triangle = _blob_front.pop_back()
 			var borders : Array = outer_triangle.get_neighbour_borders_with_parent(self)
-			if borders.size() >= 3:
-				# Assimilate surrounded cells
-				_cells.append(outer_triangle)
-			else:
-				_perimeter.append_array(borders)
-				
+			_perimeter.append_array(borders)
+		
+		# Identify chains by tracking each point in series of perimeter lines
+		var chains: Array = _get_chains_from_lines(_perimeter)
+		
+		# Set the _perimeter to the longest chain
+		var max_chain: Array = chains.back()
+		for chain in chains:
+			if len(max_chain) < len(chain):
+				max_chain = chain
+		_perimeter = max_chain
+		
 		return _perimeter
 	
 	func get_some_triangles(count: int) -> Array:
@@ -888,7 +988,9 @@ func _process(_delta) -> void:
 	
 	elif not regions_done:
 		status_label.text = "Perimeter defined..."
+		image.fill(SEA_COLOR)
 		base_grid.draw_grid(image, GRID_COLOR)
+		land_blob.draw_triangles(image, LAND_COLOR)
 		land_blob.draw_perimeter_lines(image, COAST_COLOR)
 		regions_done = region_manager.expand_tick()
 		region_manager.draw_triangles(image)
